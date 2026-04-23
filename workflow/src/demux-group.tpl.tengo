@@ -1,0 +1,177 @@
+// Per-group demultiplexing template.
+// Invoked by pframes.processColumn in demux-process.tpl.tengo, once per sampleGroupId.
+//
+// Stage 1 (this template): builds the expanded mitool pattern + runs `mitool parse`,
+// capturing *every* .result.mic file mitool produces into a file-set (regex match).
+// The file-set is then handed off to demux-group-export, which iterates the actual
+// produced files and only fires export-fastq for barcodes present in the data.
+// That indirection is required: mitool creates per-sample .mic files lazily via
+// MultiSampleRun.computeIfAbsent, so barcodes with zero matches produce no file.
+// Pre-declaring saveFile(bc + ".result.mic") for every expected barcode causes a
+// NotFound when a barcode has zero hits in the current input (small test data,
+// missing samples in the sheet, etc.). Using saveFileSet with a regex sidesteps
+// the whole class of issue — we only consume files that actually exist.
+//
+// Note: no //tengo:hash_override here. We rely on normal content-hashing so edits
+// invalidate the step result naturally. The hash_override + stepCache combo we
+// had earlier caused stale-cache traps where edits silently kept the broken
+// cached output.
+//
+// Inputs are pre-built in demux-process:
+//   perGroupData: { groupId -> [[barcode, sampleId], ...] }
+//   tagPattern:   user tag pattern with the {SMPL1} placeholder, whitespace-stripped
+//   limitInput:   optional Int for --limit (preview mode)
+
+self := import("@platforma-sdk/workflow-tengo:tpl.light")
+ll := import("@platforma-sdk/workflow-tengo:ll")
+smart := import("@platforma-sdk/workflow-tengo:smart")
+exec := import("@platforma-sdk/workflow-tengo:exec")
+render := import("@platforma-sdk/workflow-tengo:render")
+assets := import("@platforma-sdk/workflow-tengo:assets")
+pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
+slices := import("@platforma-sdk/workflow-tengo:slices")
+json := import("json")
+text := import("text")
+
+exportTpl := assets.importTemplate(":demux-group-export")
+
+self.defineOutputs("demultiplexedFastq")
+
+mitoolSw := assets.importSoftware("@platforma-open/milaboratories.software-mitool:main")
+
+TAG_NAME := "SMPL1"
+
+self.body(func(inputs) {
+	// perGroupData arrives as a plain Tengo map (passed via processColumn.extra
+	// as a raw map, not wrapped in a JSON resource).
+	perGroupData := inputs.perGroupData
+	tagPattern := inputs.tagPattern
+	limitInput := inputs.limitInput
+
+	currentKey := inputs[pConstants.KEY_FIELD_NAME]
+	ll.assert(is_array(currentKey) && len(currentKey) > 0, "expected key to contain groupId")
+	currentGroupId := string(currentKey[0])
+
+	entries := perGroupData[currentGroupId]
+	if is_undefined(entries) || len(entries) == 0 {
+		return { demultiplexedFastq: smart.createNullResource() }
+	}
+
+	// Deterministic barcode order: lex-sort the [barcode, sampleId] pairs by barcode.
+	entries = slices.quickSortFn(entries, func(a, b) {
+		return a[0] < b[0]
+	})
+
+	barcodes := []
+	barcodeToSample := {}
+	for e in entries {
+		bc := e[0]
+		sampleId := e[1]
+		if !is_undefined(barcodeToSample[bc]) {
+			ll.panic("Barcode %s used by multiple samples in group %s: %s and %s",
+				bc, currentGroupId, barcodeToSample[bc], sampleId)
+		}
+		barcodeToSample[bc] = sampleId
+		barcodes = append(barcodes, bc)
+	}
+
+	// Collect R1/R2 files from aggregated input
+	currentElement := inputs[pConstants.VALUE_FIELD_NAME]
+	ll.assert(!is_undefined(currentElement) && smart.isResource(currentElement), "invalid input element")
+
+	R1File := undefined
+	R2File := undefined
+	for sKey, inFile in currentElement.inputs() {
+		key := json.decode(sKey)
+		r := key[0]
+		if r == "R1" { R1File = inFile }
+		if r == "R2" { R2File = inFile }
+	}
+	ll.assert(!is_undefined(R1File), "no R1 input file found")
+	isPaired := !is_undefined(R2File)
+
+	// Pattern construction:
+	//   mitool grammar: `\` separates R1 and R2 sides and binds tighter than `|`,
+	//   so `A | B\C` means "(A | B) on R1, C on R2". We must therefore expand
+	//   {SMPL1} only on the R1 side (left of `\`), join variants with ` | `, and
+	//   re-attach the R2 side once at the end. If the user's pattern doesn't
+	//   include a `\` and the input is paired-end, auto-extend with `^(R2:*)`
+	//   so the R2 reads are matched trivially.
+	// tagPattern is already whitespace-normalised by the model's args lambda.
+	backslash := "\\"
+	parts := text.split(tagPattern, backslash)
+	// Guard: the user's pattern declares two reads (has a `\`) but input is
+	// single-end. mitool would error cryptically — fail loudly with intent.
+	ll.assert(!(len(parts) > 1 && !isPaired),
+		"tag pattern declares an R2 side (contains '\\\\') but input FASTQ is single-end")
+	r1UserPart := parts[0]
+	r2UserPart := ""
+	if len(parts) > 1 {
+		r2UserPart = text.join(parts[1:], backslash)
+	}
+	if r2UserPart == "" && isPaired {
+		r2UserPart = "^(R2:*)"
+	}
+
+	placeholder := "{" + TAG_NAME + "}"
+	variants := []
+	for bc in barcodes {
+		capture := "(" + TAG_NAME + ":" + bc + ")"
+		variants = append(variants, text.replace(r1UserPart, placeholder, capture, -1))
+	}
+	expandedPattern := text.join(variants, " | ")
+	if r2UserPart != "" {
+		expandedPattern = expandedPattern + backslash + r2UserPart
+	}
+
+	progressPrefix := "[==MITOOL_PROGRESS==]"
+
+	// mitool parse: auto-splits output into <barcode>.result.mic files via SMPL1 tag.
+	// We collect whatever mitool actually writes via a file-set regex — no pre-declared
+	// per-barcode saveFile calls (those would point to non-existent files when a
+	// barcode has zero hits).
+	parse := exec.builder().
+		printErrStreamToStdout().
+		env("MI_PROGRESS_PREFIX", progressPrefix).
+		software(mitoolSw).
+		cpu(8).
+		mem("16GiB").
+		arg("parse").
+		arg("--pattern").arg(expandedPattern).
+		arg("--threads").argWithVar("{system.cpu}").
+		addFile("input_R1.fastq.gz", R1File)
+
+	if !is_undefined(limitInput) {
+		parse = parse.arg("--limit").arg(string(limitInput))
+	}
+
+	if isPaired {
+		parse = parse.addFile("input_R2.fastq.gz", R2File)
+		parse = parse.arg("input_{{R}}.fastq.gz")
+	} else {
+		parse = parse.arg("input_R1.fastq.gz")
+	}
+
+	parse = parse.
+		saveFileSet("mics", "^[A-Za-z0-9]+\\.result\\.mic$").
+		saveStdoutStream().
+		saveStderrStream().
+		arg("result.mic").
+		run()
+
+	// Hand the (possibly partial) file-set to the export sub-template. It will
+	// iterate the actual files produced, look up the sample for each barcode, and
+	// build the [sampleId, readIndex] ResourceMap.
+	// Ephemeral: the export template uses awaitState("mics", "ResourceReady") so
+	// it can iterate the actual per-barcode .mic files produced by mitool. Only
+	// ephemeral templates are allowed to await state.
+	exportResult := render.createEphemeral(exportTpl, {
+		mics: parse.getFileSet("mics"),
+		barcodeToSample: smart.createJsonResource(barcodeToSample),
+		isPaired: smart.createJsonResource(isPaired)
+	})
+
+	return {
+		demultiplexedFastq: exportResult.output("demultiplexedFastq")
+	}
+})

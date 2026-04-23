@@ -1,0 +1,178 @@
+// Ephemeral orchestration template.
+// - Awaits the bundle with partitions so the linker JSON and FASTQ partition refs
+//   are materialised.
+// - Parses linker + barcode JSON here (once) and builds a per-group
+//   {groupId -> [[barcode, sampleId], ...]} map.
+// - Dispatches pframes.processColumn over the FASTQ dataset; the per-group body
+//   (demux-group) does pattern expansion + mitool parse, then hands off to
+//   demux-group-export for per-sample fastq export.
+
+self := import("@platforma-sdk/workflow-tengo:tpl")
+render := import("@platforma-sdk/workflow-tengo:render")
+assets := import("@platforma-sdk/workflow-tengo:assets")
+pframes := import("@platforma-sdk/workflow-tengo:pframes")
+pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
+ll := import("@platforma-sdk/workflow-tengo:ll")
+json := import("json")
+
+demuxGroupTpl := assets.importTemplate(":demux-group")
+flattenTpl := assets.importTemplate(":flatten")
+
+self.defineOutputs("demultiplexedFastqSpec", "demultiplexedFastqData")
+
+self.awaitState("bundle", "PColumnBundleWithPartitions")
+self.awaitState("barcodeData", "ResourceReady")
+self.awaitState("params", "ResourceReady")
+
+self.body(func(inputs) {
+	bundle := inputs.bundle
+	barcodeData := inputs.barcodeData
+	params := inputs.params
+	blockId := params.blockId
+	tagPattern := params.tagPattern
+	limitInput := params.limitInput
+
+	// The anchor IS the linker — its .data is the JSON content (partitions awaited).
+	linker := bundle.getColumn("main")
+
+	// FASTQ dataset resolved as a query against the linker's first axis.
+	fastqCols := bundle.getColumns("fastq")
+	ll.assert(!is_undefined(fastqCols) && len(fastqCols) == 1,
+		"expected exactly one fastq dataset matching the linker, got %d", len(fastqCols))
+	fastq := fastqCols[0]
+
+	sampleIdAxisSpec := linker.spec.axesSpec[1]
+	readIndexAxisSpec := fastq.spec.axesSpec[1]
+
+	// Both the linker and the barcode metadata column are PColumn/Json resources
+	// produced by samples-and-data. The JSON payload is a flat map:
+	//   { "[<groupId>,<sampleId>]": "<label>", ... }  (linker, 2 axes)
+	//   { "[<sampleId>]":           "<barcode>", ... } (metadata, 1 axis)
+	// Some producers wrap it as { data: {...}, keyLength: N }. We accept either
+	// but assert the underlying resource is PColumnData/Json so we fail loudly
+	// on unexpected shapes.
+	readJsonPColumn := func(name, resource) {
+		ll.assert(!is_undefined(resource), "%s resource is undefined", name)
+		ll.assert(resource.checkResourceType(pConstants.RTYPE_P_COLUMN_DATA_JSON),
+			"%s must be PColumnData/Json, got a different resource type", name)
+		decoded := resource.getDataAsJson()
+		ll.assert(is_map(decoded), "%s JSON payload is not a map", name)
+		if !is_undefined(decoded.data) && is_map(decoded.data) {
+			return decoded.data
+		}
+		return decoded
+	}
+
+	// Linker: key [groupId, sampleId] -> sampleLabel. Collapse to groupId -> [sampleId, ...].
+	linkerMap := readJsonPColumn("linker", linker.data)
+	ll.assert(len(linkerMap) > 0, "linker PColumn has no entries — nothing to demultiplex")
+	groupToSamples := {}
+	for encodedKey, _ in linkerMap {
+		keyArr := json.decode(encodedKey)
+		ll.assert(is_array(keyArr) && len(keyArr) == 2,
+			"invalid linker key (expected 2-tuple [groupId, sampleId]): %v", encodedKey)
+		groupId := string(keyArr[0])
+		sampleId := string(keyArr[1])
+		if is_undefined(groupToSamples[groupId]) {
+			groupToSamples[groupId] = []
+		}
+		groupToSamples[groupId] = append(groupToSamples[groupId], sampleId)
+	}
+	ll.assert(len(groupToSamples) > 0, "linker produced zero sample groups")
+
+	// Barcode source: key [sampleId] -> barcode string.
+	barcodeMap := readJsonPColumn("barcode source", barcodeData)
+	ll.assert(len(barcodeMap) > 0, "barcode source PColumn has no entries")
+	sampleToBarcode := {}
+	for encodedKey, val in barcodeMap {
+		keyArr := json.decode(encodedKey)
+		ll.assert(is_array(keyArr) && len(keyArr) == 1,
+			"invalid barcode key (expected 1-tuple [sampleId]): %v", encodedKey)
+		sampleToBarcode[string(keyArr[0])] = string(val)
+	}
+
+	// Per-group [[barcode, sampleId], ...] — demux-group walks this after lex-sort.
+	perGroupData := {}
+	for groupId, sampleIds in groupToSamples {
+		entries := []
+		for sampleId in sampleIds {
+			bc := sampleToBarcode[sampleId]
+			if is_undefined(bc) || bc == "" {
+				ll.panic("No barcode found for sample %s in group %s — check that the selected barcode metadata column has a value for every sample in the linker", sampleId, groupId)
+			}
+			entries = append(entries, [bc, sampleId])
+		}
+		ll.assert(len(entries) > 0, "sample group %s has zero samples with barcodes", groupId)
+		perGroupData[groupId] = entries
+	}
+	ll.assert(len(perGroupData) > 0, "perGroupData is empty — refusing to dispatch demultiplexing over empty input")
+
+	linkerTrace := undefined
+	if !is_undefined(linker.spec.annotations) {
+		linkerTrace = linker.spec.annotations["pl7.app/trace"]
+	}
+
+	demuxedFastqSpec := {
+		kind: "PColumn",
+		name: "pl7.app/sequencing/data",
+		domain: {
+			"pl7.app/fileExtension": "fastq.gz",
+			"pl7.app/block": blockId,
+			"pl7.app/dataset": "demultiplexed"
+		},
+		valueType: "File",
+		annotations: {
+			"pl7.app/label": "Demultiplexed FASTQ",
+			"pl7.app/trace": linkerTrace
+		},
+		axesSpec: [sampleIdAxisSpec, readIndexAxisSpec]
+	}
+
+	// Resource output type — each group's body returns one ResourceMap[sampleId, readIndex].
+	// processColumn collects them under a single-level ResourceMap keyed by groupId;
+	// the flatten template merges the two levels into one [sampleId, readIndex] map.
+	// ("ResourceMap" output type with the same spec is accepted by processColumn but
+	// exportColumnData downstream fails on the resulting super-partitioned shape.)
+	demuxOutputs := [{
+		type: "Resource",
+		spec: demuxedFastqSpec,
+		name: "demultiplexedFastq"
+	}]
+
+	// Note: no stepCache. The per-group body's content hash already keys the result;
+	// hash_override + step cache had caused stale-result traps (returning cached
+	// broken resources across edits). Letting content hashing do its job is cheaper
+	// than the debugging cost of cache traps.
+	perGroupResult := pframes.processColumn(
+		{ spec: fastq.spec, data: fastq.data },
+		demuxGroupTpl,
+		demuxOutputs,
+		{
+			aggregate: [
+				{ name: "pl7.app/sequencing/readIndex", optional: true }
+			],
+			passAggregationAxesNames: true,
+			passKey: true,
+			traceSteps: [{
+				type: "milaboratories.demux",
+				id: blockId,
+				importance: 10,
+				label: "Fastq Demultiplexing"
+			}],
+			extra: {
+				perGroupData: perGroupData,
+				tagPattern: tagPattern,
+				limitInput: limitInput
+			}
+		}
+	)
+
+	flattenResult := render.createEphemeral(flattenTpl, {
+		nestedMap: perGroupResult.outputData("demultiplexedFastq")
+	})
+
+	return {
+		demultiplexedFastqSpec: demuxedFastqSpec,
+		demultiplexedFastqData: flattenResult.output("flattenedFastq")
+	}
+})

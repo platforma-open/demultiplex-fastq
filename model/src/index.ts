@@ -1,19 +1,96 @@
-import type { InferOutputsType } from "@platforma-sdk/model";
-import { BlockModelV3, DataModelBuilder } from "@platforma-sdk/model";
+import type { InferOutputsType, PlRef } from "@platforma-sdk/model";
+import { BlockModelV3, DataModelBuilder, getAxisId, isPColumnSpec } from "@platforma-sdk/model";
 
 export type BlockData = {
-  name: string;
+  inputRef?: PlRef;
+  barcodeSourceRef?: PlRef;
+  tagPattern: string;
+  limitInput?: number;
 };
 
-const dataModel = new DataModelBuilder().from<BlockData>("v1").init(() => ({ name: "" }));
+export type BlockArgs = {
+  inputRef?: PlRef;
+  barcodeSourceRef?: PlRef;
+  tagPattern: string;
+  limitInput?: number;
+};
+
+const DEFAULT_TAG_PATTERN = "^{SMPL1}N{0:2}(R1:*)\\^N{20}(R2:*)";
+
+const dataModel = new DataModelBuilder()
+  .from<BlockData>("v1")
+  .init(() => ({ tagPattern: DEFAULT_TAG_PATTERN }));
 
 export const platforma = BlockModelV3.create(dataModel)
 
-  .args((data) => ({ name: data.name }))
+  .args<BlockArgs>((data) => {
+    if (!data.inputRef) throw new Error("Sample groups linker is required");
+    if (!data.barcodeSourceRef) throw new Error("Barcode source metadata column is required");
+    if (!data.tagPattern || !data.tagPattern.trim()) throw new Error("Tag pattern is required");
+    // Mitool's tokenizer calls nextChar(skipSpaces=true) in the top-level parse
+    // loop (tools/mitool/.../Tokenizer.kt), so whitespace between tokens is
+    // silently ignored — and spaces are *disallowed* inside tag names. Stripping
+    // all whitespace upfront gives us a canonical pattern that's equivalent for
+    // mitool and trivially splittable on `\` downstream.
+    const tagPattern = data.tagPattern.replace(/\s+/g, "");
+    return {
+      inputRef: data.inputRef,
+      barcodeSourceRef: data.barcodeSourceRef,
+      tagPattern,
+      limitInput: data.limitInput,
+    };
+  })
 
-  .output("tengoMessage", (ctx) => ctx.outputs?.resolve("tengoMessage")?.getDataAsJson())
+  // The block's single anchor is the sample-groups linker column.
+  // Axes: [sampleGroupId, sampleId]. Both the multiplexed FASTQ dataset and the
+  // sample barcode metadata are discovered from this one ref — FASTQ via axis[0],
+  // metadata via axis[1].
+  .output("inputOptions", (ctx) =>
+    ctx.resultPool.getOptions([
+      {
+        name: "pl7.app/sequencing/data/sampleGroups",
+        axes: [{ name: "pl7.app/sampleGroupId" }, { name: "pl7.app/sampleId" }],
+      },
+    ]),
+  )
 
-  .sections((_ctx) => [{ type: "link", href: "/", label: "Main" }])
+  // Barcode source scoped by axis identity: metadata columns whose sampleId axis
+  // equals the linker's axes[1]. getAxisId strips the axis spec down to
+  // {name, type, domain, contextDomain} — whatever samples-and-data stamps on
+  // the sampleId axis flows through, no specific domain keys referenced.
+  .output("barcodeSource", (ctx) => {
+    const inputRef = ctx.data.inputRef;
+    if (!inputRef) return { options: [], suggested: undefined as PlRef | undefined };
+    const linkerSpec = ctx.resultPool.getSpecByRef(inputRef);
+    if (!linkerSpec || !isPColumnSpec(linkerSpec)) {
+      return { options: [], suggested: undefined as PlRef | undefined };
+    }
+    const options =
+      ctx.resultPool.getOptions([
+        {
+          name: "pl7.app/metadata",
+          type: "String",
+          axes: [getAxisId(linkerSpec.axesSpec[1])],
+        },
+      ]) ?? [];
+
+    const labelHits = options.filter((o) => /barcode/i.test(o.label ?? ""));
+    const suggested: PlRef | undefined = labelHits.length === 1 ? labelHits[0].ref : undefined;
+    return { options, suggested };
+  })
+
+  .output("demultiplexedFastq", (ctx) =>
+    ctx.outputs
+      ?.resolve({ field: "demultiplexedFastq", allowPermanentAbsence: true })
+      ?.getPColumns(),
+  )
+
+  .title(() => "Fastq Demultiplexing")
+
+  .sections(() => [
+    { type: "link" as const, href: "/" as const, label: "Main" },
+    { type: "link" as const, href: "/qc" as const, label: "QC" },
+  ])
 
   .done();
 

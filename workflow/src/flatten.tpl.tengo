@@ -1,0 +1,68 @@
+// Flattens a nested [groupId] -> ResourceMap[sampleId, readIndex]
+// into a single ResourceMap[sampleId, readIndex].
+//
+// Ephemeral so we can awaitState on both the outer map AND every nested
+// per-group map before iterating. A pure/light template would run as soon
+// as the outer map is referenced, risking partial iteration if a group's
+// inner ResourceMap isn't yet locked.
+
+self := import("@platforma-sdk/workflow-tengo:tpl")
+smart := import("@platforma-sdk/workflow-tengo:smart")
+pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
+maps := import("@platforma-sdk/workflow-tengo:maps")
+ll := import("@platforma-sdk/workflow-tengo:ll")
+json := import("json")
+
+self.defineOutputs("flattenedFastq")
+
+self.awaitState("nestedMap", "ResourceReady")
+self.awaitState("nestedMap", { wildcard: "*" }, "ResourceReady")
+
+self.body(func(inputs) {
+	nestedMap := inputs.nestedMap
+
+	if is_undefined(nestedMap) || !smart.isResource(nestedMap) {
+		return { flattenedFastq: smart.createNullResource() }
+	}
+
+	if !nestedMap.checkResourceType(pConstants.RTYPE_P_COLUMN_DATA_RESOURCE_MAP) {
+		return { flattenedFastq: smart.createNullResource() }
+	}
+
+	flatBuilder := smart.structBuilder(
+		pConstants.RTYPE_P_COLUMN_DATA_RESOURCE_MAP,
+		json.encode({ keyLength: 2 })
+	)
+
+	seenKeys := {}
+	groupInputs := nestedMap.inputs()
+	for groupKey in maps.getKeys(groupInputs) {
+		groupRef := groupInputs[groupKey]
+		// Propagate errors from per-group bodies — better a loud failure than
+		// a silently empty demultiplexed column.
+		if groupRef.isErrorSet() {
+			ll.panic("group %s produced an error in the demultiplex body", groupKey)
+		}
+		groupValue := groupRef.getValue()
+		if !smart.isResource(groupValue) {
+			continue
+		}
+		// A group with zero matched samples returns a null resource; skip it.
+		if !groupValue.checkResourceType(pConstants.RTYPE_P_COLUMN_DATA_RESOURCE_MAP) {
+			continue
+		}
+		nestedInputs := groupValue.inputs()
+		for nestedKey in maps.getKeys(nestedInputs) {
+			if !is_undefined(seenKeys[nestedKey]) {
+				ll.panic("sampleId/readIndex key %s appears in multiple groups — sampleIds must be globally unique across sample groups",
+					nestedKey)
+			}
+			seenKeys[nestedKey] = true
+			flatBuilder.createInputField(nestedKey).set(nestedInputs[nestedKey])
+		}
+	}
+
+	return {
+		flattenedFastq: flatBuilder.lockAndBuild()
+	}
+})
