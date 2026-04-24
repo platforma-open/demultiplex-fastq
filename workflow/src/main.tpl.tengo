@@ -50,6 +50,8 @@ wf.body(func(args) {
 	mitoolLogsData := demuxResult.output("mitoolLogsData")
 	reportsSpec := demuxResult.output("reportsSpec")
 	reportsData := demuxResult.output("reportsData")
+	qcSpec := demuxResult.output("qcSpec")
+	qcData := demuxResult.output("qcData")
 
 	return {
 		outputs: {
@@ -60,7 +62,10 @@ wf.body(func(args) {
 			mitoolLogs: mitoolLogsData,
 			// ResourceMap[sampleGroupId, reportFormat] -> File — model reads via
 			// getFileHandle for download.
-			reports: pframes.exportColumnData(reportsData)
+			reports: pframes.exportColumnData(reportsData),
+			// PColumnData/Json keyed [sampleGroupId, sampleId] → matchedReads.
+			// Model reads via getDataAsJson to power the QC table.
+			qc: qcData
 		},
 		exports: {
 			demultiplexedFastq: {
@@ -70,6 +75,10 @@ wf.body(func(args) {
 			reports: {
 				spec: reportsSpec,
 				data: reportsData
+			},
+			qc: {
+				spec: qcSpec,
+				data: qcData
 			}
 		}
 	}

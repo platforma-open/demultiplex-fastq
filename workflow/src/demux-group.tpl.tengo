@@ -36,7 +36,7 @@ slices := import("@platforma-sdk/workflow-tengo:slices")
 json := import("json")
 text := import("text")
 
-self.defineOutputs("mics", "barcodeToSample", "isPaired", "mitoolLog", "reports")
+self.defineOutputs("mics", "barcodeToSample", "isPaired", "mitoolLog", "reports", "reportJsonContent")
 
 mitoolSw := assets.importSoftware("@platforma-open/milaboratories.software-mitool:main")
 
@@ -61,7 +61,8 @@ self.body(func(inputs) {
 			barcodeToSample: {},
 			isPaired: false,
 			mitoolLog: smart.createNullResource(),
-			reports: pcolumn.resourceMapBuilder(1).build()
+			reports: pcolumn.resourceMapBuilder(1).build(),
+			reportJsonContent: smart.createNullResource()
 		}
 	}
 
@@ -162,7 +163,8 @@ self.body(func(inputs) {
 
 	parse = parse.
 		arg("--report").arg("report.txt").saveFile("report.txt").
-		arg("--json-report").arg("report.json").saveFile("report.json").
+		arg("--json-report").arg("report.json").
+		saveFile("report.json").saveFileContent("report.json").
 		saveFileSet("mics", "^[A-Za-z0-9]+\\.result\\.mic$").
 		saveStdoutStream().
 		arg("result.mic").
@@ -179,6 +181,11 @@ self.body(func(inputs) {
 		barcodeToSample: barcodeToSample,
 		isPaired: isPaired,
 		mitoolLog: parse.getStdoutStream(),
-		reports: reportsBuilder.build()
+		reports: reportsBuilder.build(),
+		// JSON report content (as a Value resource) — consumed by qc.tpl.tengo
+		// to extract parseReport.perSampleMatched. Companion to the File-typed
+		// `reports[*,"json"]` entry, which is for user download; saving both
+		// avoids running parse twice.
+		reportJsonContent: parse.getFileContent("report.json")
 	}
 })

@@ -119,14 +119,30 @@ export const platforma = BlockModelV3.create(dataModel)
     return parseResourceMap(acc, (a) => a.getProgressLog(MITOOL_PROGRESS_PREFIX), true);
   })
 
-  // Per-sampleGroup parse report file(s). Today only "txt"; once mitool ships
-  // --json-report (see .meta/mitool-parse-json-report.md) the format domain picks
-  // up "json" with no model changes.
+  // Per-sampleGroup parse report files — `reportFormat ∈ {txt, json}`. Users
+  // download them via the UI; QC data is consumed via the separate `qc` output.
   .output("reports", (ctx) => {
     if (!ctx.outputs) return undefined;
     const acc = ctx.outputs.resolve({ field: "reports", allowPermanentAbsence: true });
     if (!acc) return undefined;
     return parseResourceMap(acc, (a) => a.getFileHandle(), false);
+  })
+
+  // QC table — per-sample matched-reads derived from parseReport.perSampleMatched
+  // in each group's JSON report (mitool 2.3.1-57+). Decoded into flat rows
+  // { sampleGroupId, sampleId, matched } so QcPage can render without reparsing
+  // the PColumn JSON shape.
+  .output("qc", (ctx) => {
+    const raw = ctx.outputs
+      ?.resolve({ field: "qc", allowPermanentAbsence: true })
+      ?.getDataAsJson<{ keyLength: number; data: Record<string, number> }>();
+    if (!raw) return undefined;
+    const rows: { sampleGroupId: string; sampleId: string; matched: number }[] = [];
+    for (const [encodedKey, matched] of Object.entries(raw.data ?? {})) {
+      const key = JSON.parse(encodedKey) as [string, string];
+      rows.push({ sampleGroupId: key[0], sampleId: key[1], matched });
+    }
+    return rows;
   })
 
   // Human-readable sampleGroupId and sampleId labels (if samples-and-data

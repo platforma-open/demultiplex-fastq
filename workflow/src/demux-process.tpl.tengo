@@ -19,11 +19,13 @@ json := import("json")
 demuxGroupTpl := assets.importTemplate(":demux-group")
 exportBySampleTpl := assets.importTemplate(":export-by-sample")
 flattenWithGroupTpl := assets.importTemplate(":flatten-with-group")
+qcTpl := assets.importTemplate(":qc")
 
 self.defineOutputs(
 	"demultiplexedFastqSpec", "demultiplexedFastqData",
 	"mitoolLogsSpec", "mitoolLogsData",
-	"reportsSpec", "reportsData"
+	"reportsSpec", "reportsData",
+	"qcSpec", "qcData"
 )
 
 self.awaitState("bundle", "PColumnBundleWithPartitions")
@@ -198,6 +200,31 @@ self.body(func(inputs) {
 		valueType: "String",
 		axesSpec: [sampleGroupIdAxisSpec]
 	}
+	reportJsonContentSpec := {
+		kind: "PColumn",
+		name: "milaboratories.demux/reportJsonContent",
+		domain: { "pl7.app/block": blockId },
+		valueType: "String",
+		axesSpec: [sampleGroupIdAxisSpec]
+	}
+
+	// User-facing per-sample QC: matched reads for each sample in each group.
+	// Populated by qc.tpl.tengo from parseReport.perSampleMatched in each group's
+	// JSON report (mitool 2.3.1-57+). The ephemeral produces a PColumnData/Json
+	// keyed [sampleGroupId, sampleId] → matchedReads (Long).
+	qcSpec := {
+		kind: "PColumn",
+		name: "milaboratories.demux/matchedReads",
+		domain: {
+			"pl7.app/block": blockId
+		},
+		valueType: "Long",
+		annotations: {
+			"pl7.app/label": "Matched reads",
+			"pl7.app/trace": linkerTrace
+		},
+		axesSpec: [sampleGroupIdAxisSpec, sampleIdAxisSpec]
+	}
 
 	// processColumn outputs. `type: "Resource"` per output → outer
 	// ResourceMap[groupId] whose values are whatever resource each group emits.
@@ -224,6 +251,10 @@ self.body(func(inputs) {
 		type: "Resource",
 		spec: isPairedSpec,
 		name: "isPaired"
+	}, {
+		type: "Resource",
+		spec: reportJsonContentSpec,
+		name: "reportJsonContent"
 	}]
 
 	perGroupResult := pframes.processColumn(
@@ -266,12 +297,21 @@ self.body(func(inputs) {
 		flatKeyLength: 2
 	})
 
+	// QC: decode each group's report.json, map perSampleMatched back to sampleIds,
+	// emit PColumnData/Json keyed [groupId, sampleId] → matchedReads.
+	qcResult := render.createEphemeral(qcTpl, {
+		reportJsonByGroup: perGroupResult.outputData("reportJsonContent"),
+		barcodeToSampleByGroup: perGroupResult.outputData("barcodeToSample")
+	})
+
 	return {
 		demultiplexedFastqSpec: demuxedFastqSpec,
 		demultiplexedFastqData: exportResult.output("demultiplexedFastqData"),
 		mitoolLogsSpec: mitoolLogSpec,
 		mitoolLogsData: perGroupResult.outputData("mitoolLog"),
 		reportsSpec: reportsSpec,
-		reportsData: reportsFlat.output("flat")
+		reportsData: reportsFlat.output("flat"),
+		qcSpec: qcSpec,
+		qcData: qcResult.output("qcData")
 	}
 })
