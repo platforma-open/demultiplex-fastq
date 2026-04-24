@@ -60,16 +60,16 @@ function parseProgress(raw: string | undefined | null): ParsedProgress {
   };
 }
 
+// Sentinel written into `progress` when a group finishes. AG-Grid's cell
+// refresh fires on the bound field's value change — we must therefore fold
+// the terminal signal into `progress` itself, not a sibling field. Matches
+// mixcr-clonotyping's pattern (blocks/mixcr-clonotyping/ui/src/results.ts).
+const PROGRESS_DONE = "__done__";
+
 type GroupRow = {
   groupId: string;
   label: string;
   progress: string | undefined;
-  // AG-Grid's cellRendererSelector is called imperatively, not inside a Vue
-  // effect, so reactive refs read inside the progress callback (like
-  // completedGroups) don't trigger a re-render when they flip. Threading
-  // `completed` through the row shape makes the transition a row-data diff,
-  // which AG-Grid honours.
-  completed: boolean;
   logHandle: AnyLogHandle | undefined;
   stats: { total: number; matched: number } | undefined;
 };
@@ -188,8 +188,7 @@ const rows = computed<GroupRow[]>(() => {
   return [...ids].sort().map((groupId) => ({
     groupId,
     label: labels[groupId] ?? groupId,
-    progress: progressByGroup.value[groupId],
-    completed: completedGroups.value.has(groupId),
+    progress: completedGroups.value.has(groupId) ? PROGRESS_DONE : progressByGroup.value[groupId],
     logHandle: logByGroup.value[groupId],
     stats: summary[groupId],
   }));
@@ -263,12 +262,13 @@ const columnDefs: ColDef<GroupRow>[] = [
     field: "progress",
     headerName: "Progress",
     headerComponentParams: { type: "Progress" } satisfies PlAgHeaderComponentParams,
-    progress(value, cellData) {
-      // Authoritative terminal signal: the report file is on disk for this
-      // group. Read from `cellData.data.completed` (threaded through the row
-      // shape) — AG-Grid's cellRendererSelector is invoked imperatively, so
-      // reactive refs read directly here would not retrigger on flip.
-      if (cellData.data?.completed) {
+    progress(value) {
+      // Terminal signal is folded into `progress` itself (sentinel
+      // PROGRESS_DONE when the report file has landed). AG-Grid only
+      // reinvokes cellRendererSelector when the bound field's value
+      // changes — signalling via a sibling field leaves the cell stale
+      // until the grid remounts.
+      if (value === PROGRESS_DONE) {
         return { status: "done", text: "Done" };
       }
       const parsed = parseProgress(value);
