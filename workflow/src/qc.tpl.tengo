@@ -53,6 +53,12 @@ self.body(func(inputs) {
 	// Walk per-group JSON reports, extract perSampleMatched + group totals.
 	// flat           → per-sample matched (feeds the QC Report table).
 	// groupSummary   → per-group {total, matched} (feeds the main-table bar col).
+	//
+	// ResourceMap input field names are JSON-encoded axis-value arrays —
+	// e.g. `["Unlabelled"]` — so we decode each to the bare sampleGroupId
+	// before using it as a user-visible key. The UI looks up
+	// qcGroupSummary[sampleGroupId] with the bare axis value, and QcPage
+	// expects the flat map to be keyed `json.encode([sampleGroupId, sampleId])`.
 	flat := {}
 	groupSummary := {}
 	reportInputs := reportJsonByGroup.inputs()
@@ -61,6 +67,10 @@ self.body(func(inputs) {
 		if fieldRef.isErrorSet() {
 			ll.panic("group %s reportJsonContent has error", groupKey)
 		}
+		decodedGroupKey := json.decode(groupKey)
+		ll.assert(is_array(decodedGroupKey) && len(decodedGroupKey) == 1,
+			"expected single-axis group key, got %v", groupKey)
+		sampleGroupId := string(decodedGroupKey[0])
 		contentRes := fieldRef.getValue()
 		if !smart.isResource(contentRes) {
 			continue
@@ -81,7 +91,7 @@ self.body(func(inputs) {
 
 		// Per-group totals: used by the main-table bar renderer. Always recorded,
 		// even when perSampleMatched is absent (older mitool / no Sample tag).
-		groupSummary[groupKey] = {
+		groupSummary[sampleGroupId] = {
 			total: parseReport.total,
 			matched: parseReport.matched
 		}
@@ -113,7 +123,7 @@ self.body(func(inputs) {
 				// capture). Match export-by-sample's behavior — drop silently.
 				continue
 			}
-			flat[json.encode([groupKey, sampleId])] = entry.matched
+			flat[json.encode([sampleGroupId, sampleId])] = entry.matched
 		}
 	}
 

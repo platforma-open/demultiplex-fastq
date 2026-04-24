@@ -329,7 +329,6 @@ const gridOptions: GridOptions<GroupRow> = {
   </PlSlideModal>
   <PlSlideModal v-model="data.detailOpen" width="60%">
     <template #title>
-      Sample Group —
       {{
         data.selectedGroup
           ? (app.model.outputs.sampleGroupLabels?.[data.selectedGroup] ?? data.selectedGroup)
@@ -339,7 +338,11 @@ const gridOptions: GridOptions<GroupRow> = {
     <PlTabs v-model="data.detailTab" :options="detailTabOptions" />
     <div :style="{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }">
       <template v-if="data.detailTab === 'logs'">
-        <PlLogView v-if="selectedLogHandle" :log-handle="selectedLogHandle" />
+        <PlLogView
+          v-if="selectedLogHandle"
+          :log-handle="selectedLogHandle"
+          :progress-prefix="MITOOL_PROGRESS_PREFIX"
+        />
         <div v-else :style="{ padding: '16px', color: 'var(--txt-03)' }">No log yet.</div>
       </template>
       <template v-else-if="data.detailTab === 'report'">
