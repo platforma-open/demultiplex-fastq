@@ -93,7 +93,27 @@ const logByGroup = computed<Record<string, AnyLogHandle>>(() => {
   return out;
 });
 
+// Per-group "done" signal: the json report file has materialized. Driven by the
+// reports PColumn (keyed [sampleGroupId, reportFormat]). A landed json entry
+// means mitool parse finished for that group — more reliable than the last
+// progress line (mitool doesn't always emit a terminal 100%, and the post-parse
+// flush stage has no progress reporting).
+const completedGroups = computed<Set<string>>(() => {
+  const rm = app.model.outputs.reports;
+  if (!rm?.data) return new Set();
+  const out = new Set<string>();
+  for (const { key, value } of rm.data) {
+    if (value && String(key[1]) === "json") out.add(String(key[0]));
+  }
+  return out;
+});
+
+// Rows — only populate once a run has been dispatched. `mitoolLogs` is undefined
+// pre-run, so checking it keeps the table empty (→ no "Queued" rows) until the
+// user hits Run. `sampleGroupLabels` alone populates as soon as an input is
+// picked, which would otherwise leak through.
 const rows = computed<GroupRow[]>(() => {
+  if (app.model.outputs.mitoolLogs === undefined) return [];
   const labels = app.model.outputs.sampleGroupLabels ?? {};
   const ids = new Set<string>();
   for (const id of Object.keys(labels)) ids.add(id);
@@ -161,14 +181,19 @@ const columnDefs: ColDef<GroupRow>[] = [
     field: "progress",
     headerName: "Progress",
     headerComponentParams: { type: "Progress" } satisfies PlAgHeaderComponentParams,
-    progress(cellData) {
-      const parsed = parseProgress(cellData);
+    progress(value, cellData) {
+      // Authoritative terminal signal: the report file is on disk for this
+      // group. Overrides whatever stale progress line was last scraped.
+      const groupId = cellData.data?.groupId;
+      if (groupId && completedGroups.value.has(groupId)) {
+        return { status: "done", text: "Done" };
+      }
+      const parsed = parseProgress(value);
       if (!parsed.stage) {
         return { status: "not_started", text: "Queued" };
       }
-      const done = parsed.stage.toLowerCase() === "done" || parsed.percentage === "100";
       return {
-        status: done ? "done" : "running",
+        status: "running",
         percent: parsed.percentage,
         text: parsed.stage,
         suffix: parsed.etaLabel ?? "",
