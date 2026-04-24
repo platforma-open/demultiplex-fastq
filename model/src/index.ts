@@ -14,6 +14,7 @@ export type BlockData = {
   barcodeSourceRef?: PlRef;
   tagPattern: string;
   limitInput?: number;
+  runMode: "dry" | "full";
 };
 
 export type BlockArgs = {
@@ -27,6 +28,7 @@ const DEFAULT_TAG_PATTERN = "^{SMPL1}N{0:2}(R1:*)\\^N{20}(R2:*)";
 
 const dataModel = new DataModelBuilder().from<BlockData>("v1").init(() => ({
   tagPattern: DEFAULT_TAG_PATTERN,
+  runMode: "full",
 }));
 
 export const platforma = BlockModelV3.create(dataModel)
@@ -35,6 +37,9 @@ export const platforma = BlockModelV3.create(dataModel)
     if (!data.inputRef) throw new Error("Sample groups linker is required");
     if (!data.barcodeSourceRef) throw new Error("Barcode source metadata column is required");
     if (!data.tagPattern || !data.tagPattern.trim()) throw new Error("Tag pattern is required");
+    if (data.runMode === "dry" && data.limitInput == null) {
+      throw new Error("Read limit is required for Preview mode");
+    }
     // Mitool's tokenizer calls nextChar(skipSpaces=true) in the top-level parse
     // loop (tools/mitool/.../Tokenizer.kt), so whitespace between tokens is
     // silently ignored — and spaces are *disallowed* inside tag names. Stripping
@@ -45,7 +50,9 @@ export const platforma = BlockModelV3.create(dataModel)
       inputRef: data.inputRef,
       barcodeSourceRef: data.barcodeSourceRef,
       tagPattern,
-      limitInput: data.limitInput,
+      // `limitInput` only flows to the workflow in Preview mode — Full run
+      // strips it so a stale value from an earlier Preview doesn't leak.
+      limitInput: data.runMode === "dry" ? data.limitInput : undefined,
     };
   })
 

@@ -155,18 +155,19 @@ self.body(func(inputs) {
 
 	parse = parse.
 		arg("--report").arg("report.txt").saveFile("report.txt").
+		arg("--json-report").arg("report.json").saveFile("report.json").
 		saveFileSet("mics", "^[A-Za-z0-9]+\\.result\\.mic$").
 		saveStdoutStream().
 		arg("result.mic").
 		run()
 
-	// Reports PColumn inner axis is [reportFormat]. For v1 we have only txt —
-	// once mitool ships `--json-report` (see .meta/mitool-parse-json-report.md)
-	// we add `parse.arg("--json-report").arg("report.json").saveFile("report.json")`
-	// and `reportsBuilder.add(["json"], parse.getFile("report.json"))`. The
-	// format-axis spec downstream already anticipates both values.
+	// Reports PColumn inner axis is [reportFormat]. Both formats surface the
+	// same ParseCmdReport — text is human-readable, JSON is machine-readable
+	// (and will carry per-sample counts once `perSampleMatched` lands;
+	// see .meta/mitool-parse-per-sample-counts.md).
 	reportsBuilder := pcolumn.resourceMapBuilder(1)
 	reportsBuilder.add(["txt"], parse.getFile("report.txt"))
+	reportsBuilder.add(["json"], parse.getFile("report.json"))
 
 	// Hand the (possibly partial) file-set to the export sub-template. It will
 	// iterate the actual files produced, look up the sample for each barcode, and
