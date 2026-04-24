@@ -16,8 +16,8 @@ catalogs:
       specifier: 1.2.3
       version: 1.2.3
     '@platforma-open/milaboratories.software-mitool':
-      specifier: 2.3.1-55-main
-      version: 2.3.1-55-main
+      specifier: 2.3.1-57-main
+      version: 2.3.1-57-main
     '@platforma-sdk/block-tools':
       specifier: 2.7.7
       version: 2.7.7
@@ -174,7 +174,7 @@ importers:
     dependencies:
       '@platforma-open/milaboratories.software-mitool':
         specifier: 'catalog:'
-        version: 2.3.1-55-main
+        version: 2.3.1-57-main
       '@platforma-sdk/workflow-tengo':
         specifier: 'catalog:'
         version: 5.13.1
@@ -1285,8 +1285,8 @@ packages:
     resolution: {integrity: sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg==}
     engines: {node: '>=14'}
 
-  '@platforma-open/milaboratories.software-mitool@2.3.1-55-main':
-    resolution: {integrity: sha512-niSIVCGj97aYk0qkr/A8We+PxfGJTAX9imxc0SdTzbv8yRI9FgtpeUng88WRCBYtVNZv4NSwBBDHDaZm71af8A==}
+  '@platforma-open/milaboratories.software-mitool@2.3.1-57-main':
+    resolution: {integrity: sha512-6hiRVEmfvyoNt6DGfaPyTf38R4hhuCCnISwNPuS96axdFg47GRW0i9iEfnnhpOr6wZ713y4TG4Q6W4X99hmbWA==}
 
   '@platforma-open/milaboratories.software-ptabler.schema@1.14.6':
     resolution: {integrity: sha512-X9e81kETOcYQIx8n96cs7o1LvM3A1U8jeaaJJXoWuakMWP7+NVqK7rIdfcWPL5wIpjAKVpBUbuuHNctrzy23Tw==}
@@ -5522,7 +5522,7 @@ snapshots:
       oxfmt: 0.35.0
       oxlint: 1.43.0
       rolldown: 1.0.0-rc.16
-      rolldown-plugin-dts: 0.23.2(rolldown@1.0.0-rc.16)(typescript@5.9.3)(vue-tsc@3.2.6(typescript@5.9.3))
+      rolldown-plugin-dts: 0.23.2(rolldown@1.0.0-rc.16)(typescript@5.9.3)(vue-tsc@3.2.6(typescript@5.6.3))
       rollup-plugin-copy: 3.5.0
       rollup-plugin-sourcemaps2: 0.5.6(@types/node@25.3.2)(rollup@4.53.3)
       typescript: 5.9.3
@@ -5562,7 +5562,7 @@ snapshots:
       oxfmt: 0.35.0
       oxlint: 1.43.0
       rolldown: 1.0.0-rc.16
-      rolldown-plugin-dts: 0.23.2(rolldown@1.0.0-rc.16)(typescript@5.9.3)(vue-tsc@3.2.6(typescript@5.9.3))
+      rolldown-plugin-dts: 0.23.2(rolldown@1.0.0-rc.16)(typescript@5.9.3)(vue-tsc@3.2.6(typescript@5.6.3))
       rollup-plugin-copy: 3.5.0
       rollup-plugin-sourcemaps2: 0.5.6(@types/node@25.3.2)(rollup@4.53.3)
       typescript: 5.9.3
@@ -5921,7 +5921,7 @@ snapshots:
   '@pkgjs/parseargs@0.11.0':
     optional: true
 
-  '@platforma-open/milaboratories.software-mitool@2.3.1-55-main': {}
+  '@platforma-open/milaboratories.software-mitool@2.3.1-57-main': {}
 
   '@platforma-open/milaboratories.software-ptabler.schema@1.14.6':
     dependencies:
@@ -8307,7 +8307,7 @@ snapshots:
     dependencies:
       glob: 10.4.5
 
-  rolldown-plugin-dts@0.23.2(rolldown@1.0.0-rc.16)(typescript@5.9.3)(vue-tsc@3.2.6(typescript@5.9.3)):
+  rolldown-plugin-dts@0.23.2(rolldown@1.0.0-rc.16)(typescript@5.9.3)(vue-tsc@3.2.6(typescript@5.6.3)):
     dependencies:
       '@babel/generator': 8.0.0-rc.3
       '@babel/helper-validator-identifier': 8.0.0-rc.3
