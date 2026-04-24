@@ -13,6 +13,7 @@ render := import("@platforma-sdk/workflow-tengo:render")
 assets := import("@platforma-sdk/workflow-tengo:assets")
 pframes := import("@platforma-sdk/workflow-tengo:pframes")
 pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
+pSpec := import("@platforma-sdk/workflow-tengo:pframes.spec")
 ll := import("@platforma-sdk/workflow-tengo:ll")
 json := import("json")
 
@@ -117,12 +118,21 @@ self.body(func(inputs) {
 	}
 	ll.assert(len(perGroupData) > 0, "perGroupData is empty — refusing to dispatch demultiplexing over empty input")
 
-	linkerTrace := undefined
-	if !is_undefined(linker.spec.annotations) {
-		linkerTrace = linker.spec.annotations["pl7.app/trace"]
-	}
+	// Provenance trace for user-facing outputs. The fastq input spec is the
+	// data-lineage root (the column being "processed"), and this step tags the
+	// chain as the demultiplex stage. `blockTrace.inject(spec)` returns a new
+	// spec with pl7.app/trace set — no hardcoded annotation key in this file.
+	// The internal columns produced by processColumn get the same step via
+	// its own `traceSteps` option below; keeping both on the same upstream
+	// (fastq.spec) keeps internal and external trace chains consistent.
+	blockTrace := pSpec.makeTrace(fastq.spec, {
+		type: "milaboratories.demux",
+		id: blockId,
+		importance: 10,
+		label: "Demultiplex FASTQ"
+	})
 
-	demuxedFastqSpec := {
+	demuxedFastqSpec := blockTrace.inject({
 		kind: "PColumn",
 		name: "pl7.app/sequencing/data",
 		domain: {
@@ -132,11 +142,10 @@ self.body(func(inputs) {
 		},
 		valueType: "File",
 		annotations: {
-			"pl7.app/label": "Demultiplexed FASTQ",
-			"pl7.app/trace": linkerTrace
+			"pl7.app/label": "Demultiplexed FASTQ"
 		},
 		axesSpec: [sampleIdAxisSpec, readIndexAxisSpec]
-	}
+	})
 
 	// Per-group mitool parse log (stderr merged into stdout via printErrStreamToStdout
 	// in demux-group). processColumn stacks the single Stream each group emits
@@ -213,7 +222,7 @@ self.body(func(inputs) {
 	// Populated by qc.tpl.tengo from parseReport.perSampleMatched in each group's
 	// JSON report (mitool 2.3.1-57+). The ephemeral produces a PColumnData/Json
 	// keyed [sampleGroupId, sampleId] → matchedReads (Long).
-	qcSpec := {
+	qcSpec := blockTrace.inject({
 		kind: "PColumn",
 		name: "milaboratories.demux/matchedReads",
 		domain: {
@@ -221,11 +230,10 @@ self.body(func(inputs) {
 		},
 		valueType: "Long",
 		annotations: {
-			"pl7.app/label": "Matched reads",
-			"pl7.app/trace": linkerTrace
+			"pl7.app/label": "Matched reads"
 		},
 		axesSpec: [sampleGroupIdAxisSpec, sampleIdAxisSpec]
-	}
+	})
 
 	// processColumn outputs. `type: "Resource"` per output → outer
 	// ResourceMap[groupId] whose values are whatever resource each group emits.
