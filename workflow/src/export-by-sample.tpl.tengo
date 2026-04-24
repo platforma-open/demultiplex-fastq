@@ -159,11 +159,14 @@ self.body(func(inputs) {
 			exportCmd = exportCmd.arg("--output-file").arg("R2.fastq.gz").arg("R2").saveFile("R2.fastq.gz")
 		}
 
-		// Unique workdir-local names per input: the same barcode may appear in
-		// multiple groups, so reusing the raw fileName would clobber files.
+		// Fixed-schema local names — `g<i>.mic` after the deterministic
+		// sort above. Each exec is isolated per sampleId, so the input-name
+		// shape doesn't depend on barcode or groupKey values; only on the
+		// sorted index. This keeps the exec command shape a pure function of
+		// input count (good for debuggability and for content-hashed caching).
 		execArgs := []
 		for i, entry in micEntries {
-			localName := "g" + string(i) + "-" + entry.fileName
+			localName := "g" + string(i) + ".mic"
 			exportCmd = exportCmd.addFile(localName, entry.micFile)
 			execArgs = append(execArgs, localName)
 		}

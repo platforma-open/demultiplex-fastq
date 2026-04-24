@@ -165,6 +165,11 @@ self.body(func(inputs) {
 		arg("--report").arg("report.txt").saveFile("report.txt").
 		arg("--json-report").arg("report.json").
 		saveFile("report.json").saveFileContent("report.json").
+		// mitool >=2.3.1-58-main: suppress the duplicate final-report dump
+		// to stdout. The saved report.txt/report.json are unchanged; only
+		// the live log (surfaced in the UI's per-group Logs tab) gets
+		// shorter. See .meta/mitool-demux-block-changes-shipped.md §4.
+		arg("--no-stdout-report").
 		saveFileSet("mics", "^[A-Za-z0-9]+\\.result\\.mic$").
 		saveStdoutStream().
 		arg("result.mic").
