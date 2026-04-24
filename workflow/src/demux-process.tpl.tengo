@@ -4,8 +4,9 @@
 // - Parses linker + barcode JSON here (once) and builds a per-group
 //   {groupId -> [[barcode, sampleId], ...]} map.
 // - Dispatches pframes.processColumn over the FASTQ dataset; the per-group body
-//   (demux-group) does pattern expansion + mitool parse, then hands off to
-//   demux-group-export for per-sample fastq export.
+//   (demux-group) runs `mitool parse` only, emitting per-group mics + metadata.
+// - Feeds the aggregated per-group outputs to export-by-sample, which collapses
+//   across groups and runs one multi-input `mitool export-fastq` per sampleId.
 
 self := import("@platforma-sdk/workflow-tengo:tpl")
 render := import("@platforma-sdk/workflow-tengo:render")
@@ -16,7 +17,7 @@ ll := import("@platforma-sdk/workflow-tengo:ll")
 json := import("json")
 
 demuxGroupTpl := assets.importTemplate(":demux-group")
-flattenTpl := assets.importTemplate(":flatten")
+exportBySampleTpl := assets.importTemplate(":export-by-sample")
 flattenWithGroupTpl := assets.importTemplate(":flatten-with-group")
 
 self.defineOutputs(
@@ -135,9 +136,8 @@ self.body(func(inputs) {
 	}
 
 	// Per-group mitool parse log (stderr merged into stdout via printErrStreamToStdout
-	// in demux-group). The spec's axis is the per-group key that processColumn uses
-	// to aggregate; demux-group returns one Stream per group so the final shape is
-	// ResourceMap[sampleGroupId] -> Stream.
+	// in demux-group). processColumn stacks the single Stream each group emits
+	// into ResourceMap[sampleGroupId] -> Stream.
 	mitoolLogSpec := {
 		kind: "PColumn",
 		name: "milaboratories.demux/log",
@@ -151,10 +151,9 @@ self.body(func(inputs) {
 		axesSpec: [sampleGroupIdAxisSpec]
 	}
 
-	// Per-group parse reports. demux-group returns a ResourceMap[reportFormat] with
-	// a single "txt" entry for now (JSON follows once mitool `--json-report` ships —
-	// see .meta/mitool-parse-json-report.md). The format axis domain constrains the
-	// valid values.
+	// Per-group parse reports. demux-group emits ResourceMap[reportFormat] with
+	// txt + json entries. After flatten-with-group the PColumn is keyed
+	// [sampleGroupId, reportFormat].
 	reportFormatAxisSpec := {
 		type: "String",
 		name: "milaboratories.demux/reportFormat",
@@ -175,16 +174,37 @@ self.body(func(inputs) {
 		axesSpec: [sampleGroupIdAxisSpec, reportFormatAxisSpec]
 	}
 
-	// Resource output type — each group's body returns one ResourceMap[sampleId, readIndex].
-	// processColumn collects them under a single-level ResourceMap keyed by groupId;
-	// the flatten template merges the two levels into one [sampleId, readIndex] map.
-	// ("ResourceMap" output type with the same spec is accepted by processColumn but
-	// exportColumnData downstream fails on the resulting super-partitioned shape.)
+	// Internal per-group outputs consumed by export-by-sample. Specs are
+	// required by processColumn but not user-facing — none of these three
+	// columns are published to the result pool.
+	micsSpec := {
+		kind: "PColumn",
+		name: "milaboratories.demux/mics",
+		domain: { "pl7.app/block": blockId },
+		valueType: "File",
+		axesSpec: [sampleGroupIdAxisSpec]
+	}
+	barcodeToSampleSpec := {
+		kind: "PColumn",
+		name: "milaboratories.demux/barcodeToSample",
+		domain: { "pl7.app/block": blockId },
+		valueType: "String",
+		axesSpec: [sampleGroupIdAxisSpec]
+	}
+	isPairedSpec := {
+		kind: "PColumn",
+		name: "milaboratories.demux/isPaired",
+		domain: { "pl7.app/block": blockId },
+		valueType: "String",
+		axesSpec: [sampleGroupIdAxisSpec]
+	}
+
+	// processColumn outputs. `type: "Resource"` per output → outer
+	// ResourceMap[groupId] whose values are whatever resource each group emits.
+	// Note: no stepCache. The per-group body's content hash already keys the result;
+	// hash_override + step cache had caused stale-result traps (returning cached
+	// broken resources across edits).
 	demuxOutputs := [{
-		type: "Resource",
-		spec: demuxedFastqSpec,
-		name: "demultiplexedFastq"
-	}, {
 		type: "Resource",
 		spec: mitoolLogSpec,
 		name: "mitoolLog"
@@ -192,12 +212,20 @@ self.body(func(inputs) {
 		type: "Resource",
 		spec: reportsSpec,
 		name: "reports"
+	}, {
+		type: "Resource",
+		spec: micsSpec,
+		name: "mics"
+	}, {
+		type: "Resource",
+		spec: barcodeToSampleSpec,
+		name: "barcodeToSample"
+	}, {
+		type: "Resource",
+		spec: isPairedSpec,
+		name: "isPaired"
 	}]
 
-	// Note: no stepCache. The per-group body's content hash already keys the result;
-	// hash_override + step cache had caused stale-result traps (returning cached
-	// broken resources across edits). Letting content hashing do its job is cheaper
-	// than the debugging cost of cache traps.
 	perGroupResult := pframes.processColumn(
 		{ spec: fastq.spec, data: fastq.data },
 		demuxGroupTpl,
@@ -222,12 +250,15 @@ self.body(func(inputs) {
 		}
 	)
 
-	flattenResult := render.createEphemeral(flattenTpl, {
-		nestedMap: perGroupResult.outputData("demultiplexedFastq")
+	// Cross-group fastq export: one multi-input export-fastq per sampleId,
+	// producing a flat ResourceMap[sampleId, readIndex] -> File directly.
+	exportResult := render.createEphemeral(exportBySampleTpl, {
+		nestedMics: perGroupResult.outputData("mics"),
+		barcodeToSampleByGroup: perGroupResult.outputData("barcodeToSample"),
+		isPairedByGroup: perGroupResult.outputData("isPaired")
 	})
 
-	// reports is declared with `type: "Resource"`, so its processColumn output
-	// is a ResourceMap[groupId] whose values are inner ResourceMaps[format].
+	// reports: `type: "Resource"` → ResourceMap[groupId] -> ResourceMap[format].
 	// exportColumnData consumes flat ResourceMaps, so flatten-with-group
 	// collapses to ResourceMap[groupId, reportFormat].
 	reportsFlat := render.createEphemeral(flattenWithGroupTpl, {
@@ -237,7 +268,7 @@ self.body(func(inputs) {
 
 	return {
 		demultiplexedFastqSpec: demuxedFastqSpec,
-		demultiplexedFastqData: flattenResult.output("flattenedFastq"),
+		demultiplexedFastqData: exportResult.output("demultiplexedFastqData"),
 		mitoolLogsSpec: mitoolLogSpec,
 		mitoolLogsData: perGroupResult.outputData("mitoolLog"),
 		reportsSpec: reportsSpec,

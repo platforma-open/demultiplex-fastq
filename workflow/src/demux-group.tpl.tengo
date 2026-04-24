@@ -1,16 +1,19 @@
 // Per-group demultiplexing template.
 // Invoked by pframes.processColumn in demux-process.tpl.tengo, once per sampleGroupId.
 //
-// Stage 1 (this template): builds the expanded mitool pattern + runs `mitool parse`,
-// capturing *every* .result.mic file mitool produces into a file-set (regex match).
-// The file-set is then handed off to demux-group-export, which iterates the actual
-// produced files and only fires export-fastq for barcodes present in the data.
-// That indirection is required: mitool creates per-sample .mic files lazily via
-// MultiSampleRun.computeIfAbsent, so barcodes with zero matches produce no file.
-// Pre-declaring saveFile(bc + ".result.mic") for every expected barcode causes a
-// NotFound when a barcode has zero hits in the current input (small test data,
-// missing samples in the sheet, etc.). Using saveFileSet with a regex sidesteps
-// the whole class of issue — we only consume files that actually exist.
+// Runs `mitool parse` per group and emits five outputs that processColumn
+// aggregates across groups:
+//   - mics:            fileSet `{<barcode>.result.mic -> File}` — produced lazily
+//                      by mitool's MultiSampleRun (barcodes with zero matches
+//                      produce no file); collected via saveFileSet regex
+//   - barcodeToSample: JSON `{<bc>: <sampleId>}` for this group
+//   - isPaired:        JSON bool — paired-end status of the input
+//   - mitoolLog:       merged stderr/stdout stream for live progress + log viewer
+//   - reports:         ResourceMap[reportFormat] -> File for txt+json parse reports
+//
+// The cross-group export-fastq stage (export-by-sample.tpl.tengo) consumes the
+// first three, running ONE mitool export-fastq per sampleId with every .mic
+// file belonging to that sample across all groups.
 //
 // Note: no //tengo:hash_override here. We rely on normal content-hashing so edits
 // invalidate the step result naturally. The hash_override + stepCache combo we
@@ -26,7 +29,6 @@ self := import("@platforma-sdk/workflow-tengo:tpl.light")
 ll := import("@platforma-sdk/workflow-tengo:ll")
 smart := import("@platforma-sdk/workflow-tengo:smart")
 exec := import("@platforma-sdk/workflow-tengo:exec")
-render := import("@platforma-sdk/workflow-tengo:render")
 assets := import("@platforma-sdk/workflow-tengo:assets")
 pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
 pcolumn := import("@platforma-sdk/workflow-tengo:pframes.pcolumn")
@@ -34,9 +36,7 @@ slices := import("@platforma-sdk/workflow-tengo:slices")
 json := import("json")
 text := import("text")
 
-exportTpl := assets.importTemplate(":demux-group-export")
-
-self.defineOutputs("demultiplexedFastq", "mitoolLog", "reports")
+self.defineOutputs("mics", "barcodeToSample", "isPaired", "mitoolLog", "reports")
 
 mitoolSw := assets.importSoftware("@platforma-open/milaboratories.software-mitool:main")
 
@@ -55,7 +55,14 @@ self.body(func(inputs) {
 
 	entries := perGroupData[currentGroupId]
 	if is_undefined(entries) || len(entries) == 0 {
-		return { demultiplexedFastq: smart.createNullResource() }
+		// Empty group: no parse run. Downstream iteration skips null inners.
+		return {
+			mics: smart.createNullResource(),
+			barcodeToSample: {},
+			isPaired: false,
+			mitoolLog: smart.createNullResource(),
+			reports: pcolumn.resourceMapBuilder(1).build()
+		}
 	}
 
 	// Deterministic barcode order: lex-sort the [barcode, sampleId] pairs by barcode.
@@ -162,27 +169,15 @@ self.body(func(inputs) {
 		run()
 
 	// Reports PColumn inner axis is [reportFormat]. Both formats surface the
-	// same ParseCmdReport — text is human-readable, JSON is machine-readable
-	// (and will carry per-sample counts once `perSampleMatched` lands;
-	// see .meta/mitool-parse-per-sample-counts.md).
+	// same ParseCmdReport — text is human-readable, JSON is machine-readable.
 	reportsBuilder := pcolumn.resourceMapBuilder(1)
 	reportsBuilder.add(["txt"], parse.getFile("report.txt"))
 	reportsBuilder.add(["json"], parse.getFile("report.json"))
 
-	// Hand the (possibly partial) file-set to the export sub-template. It will
-	// iterate the actual files produced, look up the sample for each barcode, and
-	// build the [sampleId, readIndex] ResourceMap plus [sampleId] matched counts.
-	// Ephemeral: the export template uses awaitState("mics", "ResourceReady") so
-	// it can iterate the actual per-barcode .mic files produced by mitool. Only
-	// ephemeral templates are allowed to await state.
-	exportResult := render.createEphemeral(exportTpl, {
-		mics: parse.getFileSet("mics"),
-		barcodeToSample: smart.createJsonResource(barcodeToSample),
-		isPaired: smart.createJsonResource(isPaired)
-	})
-
 	return {
-		demultiplexedFastq: exportResult.output("demultiplexedFastq"),
+		mics: parse.getFileSet("mics"),
+		barcodeToSample: barcodeToSample,
+		isPaired: isPaired,
 		mitoolLog: parse.getStdoutStream(),
 		reports: reportsBuilder.build()
 	}
