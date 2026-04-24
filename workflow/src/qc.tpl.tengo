@@ -91,6 +91,12 @@ self.body(func(inputs) {
 
 		// Per-group totals: used by the main-table bar renderer. Always recorded,
 		// even when perSampleMatched is absent (older mitool / no Sample tag).
+		// Asserting shape explicitly so a silent rename in mitool's report surfaces
+		// here rather than as an empty bar cell in the UI.
+		ll.assert(is_int(parseReport.total),
+			"group %s report.json parseReport.total is not an int: %v", sampleGroupId, parseReport.total)
+		ll.assert(is_int(parseReport.matched),
+			"group %s report.json parseReport.matched is not an int: %v", sampleGroupId, parseReport.matched)
 		groupSummary[sampleGroupId] = {
 			total: parseReport.total,
 			matched: parseReport.matched

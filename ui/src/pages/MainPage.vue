@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { AgGridVue } from "ag-grid-vue3";
 
-import type { AnyLogHandle } from "@platforma-sdk/model";
+import type { AnyLogHandle, LocalBlobHandle } from "@platforma-sdk/model";
 import type { PlAgHeaderComponentParams, PlChartStackedBarSettings } from "@platforma-sdk/ui-vue";
 import {
   AgGridTheme,
@@ -64,6 +64,12 @@ type GroupRow = {
   groupId: string;
   label: string;
   progress: string | undefined;
+  // AG-Grid's cellRendererSelector is called imperatively, not inside a Vue
+  // effect, so reactive refs read inside the progress callback (like
+  // completedGroups) don't trigger a re-render when they flip. Threading
+  // `completed` through the row shape makes the transition a row-data diff,
+  // which AG-Grid honours.
+  completed: boolean;
   logHandle: AnyLogHandle | undefined;
   stats: { total: number; matched: number } | undefined;
 };
@@ -152,16 +158,15 @@ const completedGroups = computed<Set<string>>(() => {
 });
 
 // Per-group txt report blob handle — double-click opens it in the Report tab.
-// `getFileHandle()` returns { handle, size }; ReactiveFileContent expects the
-// raw blob handle, so unwrap here.
+// `getFileHandle()` returns LocalBlobHandleAndSize ({ handle, size });
+// ReactiveFileContent.getContentString expects just the `.handle`.
 const txtReportByGroup = computed(() => {
   const rm = app.model.outputs.reports;
-  if (!rm?.data) return {} as Record<string, unknown>;
-  const out: Record<string, unknown> = {};
+  if (!rm?.data) return {} as Record<string, LocalBlobHandle>;
+  const out: Record<string, LocalBlobHandle> = {};
   for (const { key, value } of rm.data) {
     if (value && String(key[1]) === "txt") {
-      // Handle shape varies (local vs remote); extract .handle if present.
-      out[String(key[0])] = (value as { handle?: unknown }).handle ?? value;
+      out[String(key[0])] = value.handle;
     }
   }
   return out;
@@ -184,6 +189,7 @@ const rows = computed<GroupRow[]>(() => {
     groupId,
     label: labels[groupId] ?? groupId,
     progress: progressByGroup.value[groupId],
+    completed: completedGroups.value.has(groupId),
     logHandle: logByGroup.value[groupId],
     stats: summary[groupId],
   }));
@@ -222,8 +228,7 @@ const reactiveFileContent = ReactiveFileContent.useGlobal();
 const selectedReportContent = computed(() => {
   const handle = selectedReportHandle.value;
   if (!handle) return undefined;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return reactiveFileContent.getContentString(handle as any)?.value;
+  return reactiveFileContent.getContentString(handle)?.value;
 });
 
 const openDetailForRow = (row: GroupRow | undefined) => {
@@ -260,9 +265,10 @@ const columnDefs: ColDef<GroupRow>[] = [
     headerComponentParams: { type: "Progress" } satisfies PlAgHeaderComponentParams,
     progress(value, cellData) {
       // Authoritative terminal signal: the report file is on disk for this
-      // group. Overrides whatever stale progress line was last scraped.
-      const groupId = cellData.data?.groupId;
-      if (groupId && completedGroups.value.has(groupId)) {
+      // group. Read from `cellData.data.completed` (threaded through the row
+      // shape) — AG-Grid's cellRendererSelector is invoked imperatively, so
+      // reactive refs read directly here would not retrigger on flip.
+      if (cellData.data?.completed) {
         return { status: "done", text: "Done" };
       }
       const parsed = parseProgress(value);
@@ -299,7 +305,7 @@ const gridOptions: GridOptions<GroupRow> = {
 
 <template>
   <PlBlockPage>
-    <template #title>Fastq Demultiplexing</template>
+    <template #title>Demultiplex FASTQ</template>
     <template #append>
       <PlBtnGhost @click.stop="data.settingsOpen = true">
         Settings

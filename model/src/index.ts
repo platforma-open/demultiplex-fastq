@@ -13,7 +13,9 @@ export type BlockData = {
   inputRef?: PlRef;
   barcodeSourceRef?: PlRef;
   tagPattern: string;
-  limitInput?: number;
+  // Always a number. Only consumed when runMode === "dry"; kept non-optional
+  // so the Preview-mode field never has to handle a missing value.
+  limitInput: number;
   runMode: "dry" | "full";
 };
 
@@ -25,9 +27,11 @@ export type BlockArgs = {
 };
 
 const DEFAULT_TAG_PATTERN = "^{SMPL1}N{0:2}(R1:*)\\^N{20}(R2:*)";
+const DRY_RUN_READS_DEFAULT = 100_000;
 
 const dataModel = new DataModelBuilder().from<BlockData>("v1").init(() => ({
   tagPattern: DEFAULT_TAG_PATTERN,
+  limitInput: DRY_RUN_READS_DEFAULT,
   runMode: "full",
 }));
 
@@ -37,8 +41,8 @@ export const platforma = BlockModelV3.create(dataModel)
     if (!data.inputRef) throw new Error("Sample groups linker is required");
     if (!data.barcodeSourceRef) throw new Error("Barcode source metadata column is required");
     if (!data.tagPattern || !data.tagPattern.trim()) throw new Error("Tag pattern is required");
-    if (data.runMode === "dry" && data.limitInput == null) {
-      throw new Error("Read limit is required for Preview mode");
+    if (data.runMode === "dry" && data.limitInput <= 0) {
+      throw new Error("Read limit must be a positive integer for Preview mode");
     }
     // Mitool's tokenizer calls nextChar(skipSpaces=true) in the top-level parse
     // loop (tools/mitool/.../Tokenizer.kt), so whitespace between tokens is
@@ -137,6 +141,12 @@ export const platforma = BlockModelV3.create(dataModel)
       ?.resolve({ field: "qc", allowPermanentAbsence: true })
       ?.getDataAsJson<{ keyLength: number; data: Record<string, number> }>();
     if (!raw) return undefined;
+    if (raw.keyLength !== 2) {
+      throw new Error(
+        `qc PColumnData/Json: expected keyLength=2, got ${raw.keyLength}. ` +
+          `Workflow must key flat entries as [sampleGroupId, sampleId].`,
+      );
+    }
     const rows: { sampleGroupId: string; sampleId: string; matched: number }[] = [];
     for (const [encodedKey, matched] of Object.entries(raw.data ?? {})) {
       const key = JSON.parse(encodedKey) as [string, string];
@@ -173,7 +183,7 @@ export const platforma = BlockModelV3.create(dataModel)
     return ctx.resultPool.findLabelsForColumnAxis(spec, 1);
   })
 
-  .title(() => "Fastq Demultiplexing")
+  .title(() => "Demultiplex FASTQ")
 
   .sections(() => [
     { type: "link" as const, href: "/" as const, label: "Main" },

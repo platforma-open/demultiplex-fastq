@@ -272,7 +272,7 @@ self.body(func(inputs) {
 				type: "milaboratories.demux",
 				id: blockId,
 				importance: 10,
-				label: "Fastq Demultiplexing"
+				label: "Demultiplex FASTQ"
 			}],
 			extra: {
 				perGroupData: perGroupData,

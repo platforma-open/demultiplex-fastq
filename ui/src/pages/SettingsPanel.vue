@@ -6,8 +6,6 @@ import { useApp } from "../app";
 
 const app = useApp();
 
-const DRY_RUN_READS_DEFAULT = 100_000;
-
 const runModeOptions: ListOption<"dry" | "full">[] = [
   { label: "Preview", value: "dry" },
   { label: "Full run", value: "full" },
@@ -23,17 +21,6 @@ watch(
     }
   },
   { immediate: true },
-);
-
-// When switching INTO Preview and no limit is set yet, drop in a sensible
-// default so the user doesn't face an instant validation error.
-watch(
-  () => app.model.data.runMode,
-  (value) => {
-    if (value === "dry" && app.model.data.limitInput == null) {
-      app.model.data.limitInput = DRY_RUN_READS_DEFAULT;
-    }
-  },
 );
 </script>
 
@@ -60,15 +47,7 @@ watch(
   </PlBtnGroup>
 
   <template v-if="app.model.data.runMode === 'dry'">
-    <PlNumberField
-      v-model="app.model.data.limitInput"
-      label="Reads per group limit"
-      :clearable="true"
-      :minValue="1"
-      :error-message="
-        app.model.data.limitInput == null ? 'Read limit is required for Preview mode' : undefined
-      "
-    >
+    <PlNumberField v-model="app.model.data.limitInput" label="Reads per group limit" :minValue="1">
       <template #tooltip>
         Number of reads to process per sample group in Preview mode. Default: 100,000.
       </template>
