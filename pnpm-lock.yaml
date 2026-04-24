@@ -16,8 +16,8 @@ catalogs:
       specifier: 1.2.3
       version: 1.2.3
     '@platforma-open/milaboratories.software-mitool':
-      specifier: 2.3.1-52-main
-      version: 2.3.1-52-main
+      specifier: 2.3.1-55-main
+      version: 2.3.1-55-main
     '@platforma-sdk/block-tools':
       specifier: 2.7.7
       version: 2.7.7
@@ -36,6 +36,12 @@ catalogs:
     '@platforma-sdk/workflow-tengo':
       specifier: 5.13.1
       version: 5.13.1
+    ag-grid-enterprise:
+      specifier: ~34.1.2
+      version: 34.1.2
+    ag-grid-vue3:
+      specifier: ~34.1.2
+      version: 34.1.2
     shx:
       specifier: 0.4.0
       version: 0.4.0
@@ -132,9 +138,18 @@ importers:
       '@platforma-open/milaboratories.demultiplex-fastq.model':
         specifier: workspace:*
         version: link:../model
+      '@platforma-sdk/model':
+        specifier: 'catalog:'
+        version: 1.64.0
       '@platforma-sdk/ui-vue':
         specifier: 'catalog:'
         version: 1.64.0(@bytecodealliance/preview2-shim@0.17.8)(typescript@5.6.3)
+      ag-grid-enterprise:
+        specifier: 'catalog:'
+        version: 34.1.2
+      ag-grid-vue3:
+        specifier: 'catalog:'
+        version: 34.1.2(vue@3.5.25(typescript@5.6.3))
       typescript:
         specifier: '*'
         version: 5.6.3
@@ -159,7 +174,7 @@ importers:
     dependencies:
       '@platforma-open/milaboratories.software-mitool':
         specifier: 'catalog:'
-        version: 2.3.1-52-main
+        version: 2.3.1-55-main
       '@platforma-sdk/workflow-tengo':
         specifier: 'catalog:'
         version: 5.13.1
@@ -1270,8 +1285,8 @@ packages:
     resolution: {integrity: sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg==}
     engines: {node: '>=14'}
 
-  '@platforma-open/milaboratories.software-mitool@2.3.1-52-main':
-    resolution: {integrity: sha512-TsiilQKySLUb2T0S0c7yr4hmnzi2dV+p8kOrxlLzgudQIOKGUeOCSoBB8x2ECg/J79fDDR/1ts30lIcLmAdiCQ==}
+  '@platforma-open/milaboratories.software-mitool@2.3.1-55-main':
+    resolution: {integrity: sha512-niSIVCGj97aYk0qkr/A8We+PxfGJTAX9imxc0SdTzbv8yRI9FgtpeUng88WRCBYtVNZv4NSwBBDHDaZm71af8A==}
 
   '@platforma-open/milaboratories.software-ptabler.schema@1.14.6':
     resolution: {integrity: sha512-X9e81kETOcYQIx8n96cs7o1LvM3A1U8jeaaJJXoWuakMWP7+NVqK7rIdfcWPL5wIpjAKVpBUbuuHNctrzy23Tw==}
@@ -5906,7 +5921,7 @@ snapshots:
   '@pkgjs/parseargs@0.11.0':
     optional: true
 
-  '@platforma-open/milaboratories.software-mitool@2.3.1-52-main': {}
+  '@platforma-open/milaboratories.software-mitool@2.3.1-55-main': {}
 
   '@platforma-open/milaboratories.software-ptabler.schema@1.14.6':
     dependencies:

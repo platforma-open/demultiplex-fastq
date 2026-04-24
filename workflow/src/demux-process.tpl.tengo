@@ -17,8 +17,13 @@ json := import("json")
 
 demuxGroupTpl := assets.importTemplate(":demux-group")
 flattenTpl := assets.importTemplate(":flatten")
+flattenWithGroupTpl := assets.importTemplate(":flatten-with-group")
 
-self.defineOutputs("demultiplexedFastqSpec", "demultiplexedFastqData")
+self.defineOutputs(
+	"demultiplexedFastqSpec", "demultiplexedFastqData",
+	"mitoolLogsSpec", "mitoolLogsData",
+	"reportsSpec", "reportsData"
+)
 
 self.awaitState("bundle", "PColumnBundleWithPartitions")
 self.awaitState("barcodeData", "ResourceReady")
@@ -41,6 +46,7 @@ self.body(func(inputs) {
 		"expected exactly one fastq dataset matching the linker, got %d", len(fastqCols))
 	fastq := fastqCols[0]
 
+	sampleGroupIdAxisSpec := linker.spec.axesSpec[0]
 	sampleIdAxisSpec := linker.spec.axesSpec[1]
 	readIndexAxisSpec := fastq.spec.axesSpec[1]
 
@@ -128,6 +134,47 @@ self.body(func(inputs) {
 		axesSpec: [sampleIdAxisSpec, readIndexAxisSpec]
 	}
 
+	// Per-group mitool parse log (stderr merged into stdout via printErrStreamToStdout
+	// in demux-group). The spec's axis is the per-group key that processColumn uses
+	// to aggregate; demux-group returns one Stream per group so the final shape is
+	// ResourceMap[sampleGroupId] -> Stream.
+	mitoolLogSpec := {
+		kind: "PColumn",
+		name: "milaboratories.demux/log",
+		domain: {
+			"pl7.app/block": blockId
+		},
+		valueType: "Log",
+		annotations: {
+			"pl7.app/label": "mitool parse log"
+		},
+		axesSpec: [sampleGroupIdAxisSpec]
+	}
+
+	// Per-group parse reports. demux-group returns a ResourceMap[reportFormat] with
+	// a single "txt" entry for now (JSON follows once mitool `--json-report` ships —
+	// see .meta/mitool-parse-json-report.md). The format axis domain constrains the
+	// valid values.
+	reportFormatAxisSpec := {
+		type: "String",
+		name: "milaboratories.demux/reportFormat",
+		annotations: {
+			"pl7.app/label": "Report format"
+		}
+	}
+	reportsSpec := {
+		kind: "PColumn",
+		name: "milaboratories.demux/report",
+		domain: {
+			"pl7.app/block": blockId
+		},
+		valueType: "File",
+		annotations: {
+			"pl7.app/label": "Parse report"
+		},
+		axesSpec: [sampleGroupIdAxisSpec, reportFormatAxisSpec]
+	}
+
 	// Resource output type — each group's body returns one ResourceMap[sampleId, readIndex].
 	// processColumn collects them under a single-level ResourceMap keyed by groupId;
 	// the flatten template merges the two levels into one [sampleId, readIndex] map.
@@ -137,6 +184,14 @@ self.body(func(inputs) {
 		type: "Resource",
 		spec: demuxedFastqSpec,
 		name: "demultiplexedFastq"
+	}, {
+		type: "Resource",
+		spec: mitoolLogSpec,
+		name: "mitoolLog"
+	}, {
+		type: "Resource",
+		spec: reportsSpec,
+		name: "reports"
 	}]
 
 	// Note: no stepCache. The per-group body's content hash already keys the result;
@@ -171,8 +226,21 @@ self.body(func(inputs) {
 		nestedMap: perGroupResult.outputData("demultiplexedFastq")
 	})
 
+	// reports is declared with `type: "Resource"`, so its processColumn output
+	// is a ResourceMap[groupId] whose values are inner ResourceMaps[format].
+	// exportColumnData consumes flat ResourceMaps, so flatten-with-group
+	// collapses to ResourceMap[groupId, reportFormat].
+	reportsFlat := render.createEphemeral(flattenWithGroupTpl, {
+		nestedMap: perGroupResult.outputData("reports"),
+		flatKeyLength: 2
+	})
+
 	return {
 		demultiplexedFastqSpec: demuxedFastqSpec,
-		demultiplexedFastqData: flattenResult.output("flattenedFastq")
+		demultiplexedFastqData: flattenResult.output("flattenedFastq"),
+		mitoolLogsSpec: mitoolLogSpec,
+		mitoolLogsData: perGroupResult.outputData("mitoolLog"),
+		reportsSpec: reportsSpec,
+		reportsData: reportsFlat.output("flat")
 	}
 })

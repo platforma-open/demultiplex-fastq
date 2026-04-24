@@ -1,5 +1,13 @@
 import type { InferOutputsType, PlRef } from "@platforma-sdk/model";
-import { BlockModelV3, DataModelBuilder, getAxisId, isPColumnSpec } from "@platforma-sdk/model";
+import {
+  BlockModelV3,
+  DataModelBuilder,
+  getAxisId,
+  isPColumnSpec,
+  parseResourceMap,
+} from "@platforma-sdk/model";
+
+const MITOOL_PROGRESS_PREFIX = "[==MITOOL_PROGRESS==]";
 
 export type BlockData = {
   inputRef?: PlRef;
@@ -17,9 +25,9 @@ export type BlockArgs = {
 
 const DEFAULT_TAG_PATTERN = "^{SMPL1}N{0:2}(R1:*)\\^N{20}(R2:*)";
 
-const dataModel = new DataModelBuilder()
-  .from<BlockData>("v1")
-  .init(() => ({ tagPattern: DEFAULT_TAG_PATTERN }));
+const dataModel = new DataModelBuilder().from<BlockData>("v1").init(() => ({
+  tagPattern: DEFAULT_TAG_PATTERN,
+}));
 
 export const platforma = BlockModelV3.create(dataModel)
 
@@ -84,6 +92,53 @@ export const platforma = BlockModelV3.create(dataModel)
       ?.resolve({ field: "demultiplexedFastq", allowPermanentAbsence: true })
       ?.getPColumns(),
   )
+
+  // Per-sampleGroup mitool parse log handles — MainPage wires these into a log
+  // viewer keyed on sampleGroupId.
+  .output("mitoolLogs", (ctx) => {
+    if (!ctx.outputs) return undefined;
+    const acc = ctx.outputs.resolve({ field: "mitoolLogs", allowPermanentAbsence: true });
+    if (!acc) return undefined;
+    return parseResourceMap(acc, (a) => a.getLogHandle(), false);
+  })
+
+  // Live per-sampleGroup progress scraped from the merged stderr/stdout stream.
+  // Prefix is set via MI_PROGRESS_PREFIX env var in demux-group.tpl.tengo — mitool
+  // emits one line per tick with that prefix.
+  .output("mitoolProgress", (ctx) => {
+    if (!ctx.outputs) return undefined;
+    const acc = ctx.outputs.resolve({ field: "mitoolLogs", allowPermanentAbsence: true });
+    if (!acc) return undefined;
+    return parseResourceMap(acc, (a) => a.getProgressLog(MITOOL_PROGRESS_PREFIX), true);
+  })
+
+  // Per-sampleGroup parse report file(s). Today only "txt"; once mitool ships
+  // --json-report (see .meta/mitool-parse-json-report.md) the format domain picks
+  // up "json" with no model changes.
+  .output("reports", (ctx) => {
+    if (!ctx.outputs) return undefined;
+    const acc = ctx.outputs.resolve({ field: "reports", allowPermanentAbsence: true });
+    if (!acc) return undefined;
+    return parseResourceMap(acc, (a) => a.getFileHandle(), false);
+  })
+
+  // Human-readable sampleGroupId and sampleId labels (if samples-and-data
+  // published a label column on those axes). MainPage/QcPage render these.
+  .output("sampleGroupLabels", (ctx) => {
+    const inputRef = ctx.data.inputRef;
+    if (!inputRef) return undefined;
+    const spec = ctx.resultPool.getSpecByRef(inputRef);
+    if (!spec || !isPColumnSpec(spec)) return undefined;
+    return ctx.resultPool.findLabelsForColumnAxis(spec, 0);
+  })
+
+  .output("sampleLabels", (ctx) => {
+    const inputRef = ctx.data.inputRef;
+    if (!inputRef) return undefined;
+    const spec = ctx.resultPool.getSpecByRef(inputRef);
+    if (!spec || !isPColumnSpec(spec)) return undefined;
+    return ctx.resultPool.findLabelsForColumnAxis(spec, 1);
+  })
 
   .title(() => "Fastq Demultiplexing")
 

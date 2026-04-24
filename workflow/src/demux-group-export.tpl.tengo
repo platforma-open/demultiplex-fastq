@@ -4,8 +4,15 @@
 // <barcode>.result.mic files. This template awaits the file-set being ready,
 // enumerates the files that actually exist (mitool's MultiSampleRun creates
 // per-sample writers lazily, so barcodes with zero matches produce no file),
-// then runs `mitool export-fastq` only for those barcodes, assembling a
+// then runs `mitool export-fastq` for each present barcode, assembling a
 // ResourceMap keyed by [sampleId, readIndex].
+//
+// Per-sample matched-read counts are NOT emitted here: mitool's default
+// splitBySample=true strips sample-level tags (SMPL1) from the per-sample
+// .mic headers (TagParsePipeline.kt:309-311), so `mitool tag-stat --tags SMPL1`
+// fails with "Tag SMPL1 not found". See .meta/mitool-parse-json-report.md —
+// once mitool exposes a record-count CLI (or tag-stat grows a `no-tags`
+// mode), we'll add matchedCounts back and wire the qc PColumn.
 //
 // Inputs:
 //   mics:            file-set resource { "<barcode>.result.mic" -> File }
@@ -41,7 +48,7 @@ self.body(func(inputs) {
 	isPaired := inputs.isPaired
 
 	progressPrefix := "[==MITOOL_PROGRESS==]"
-	builder := pcolumn.resourceMapBuilder(2)
+	fastqBuilder := pcolumn.resourceMapBuilder(2)
 
 	suffixLen := len(MIC_SUFFIX)
 	for fileName, micFile in mics {
@@ -72,13 +79,13 @@ self.body(func(inputs) {
 
 		exportResult := exportCmd.arg(fileName).run()
 
-		builder.add([sampleId, "R1"], exportResult.getFile("R1.fastq.gz"))
+		fastqBuilder.add([sampleId, "R1"], exportResult.getFile("R1.fastq.gz"))
 		if isPaired {
-			builder.add([sampleId, "R2"], exportResult.getFile("R2.fastq.gz"))
+			fastqBuilder.add([sampleId, "R2"], exportResult.getFile("R2.fastq.gz"))
 		}
 	}
 
 	return {
-		demultiplexedFastq: builder.build()
+		demultiplexedFastq: fastqBuilder.build()
 	}
 })

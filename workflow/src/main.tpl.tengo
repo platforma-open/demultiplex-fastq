@@ -47,15 +47,29 @@ wf.body(func(args) {
 
 	demultiplexedFastqSpec := demuxResult.output("demultiplexedFastqSpec")
 	demultiplexedFastqData := demuxResult.output("demultiplexedFastqData")
+	mitoolLogsData := demuxResult.output("mitoolLogsData")
+	reportsSpec := demuxResult.output("reportsSpec")
+	reportsData := demuxResult.output("reportsData")
 
 	return {
 		outputs: {
-			demultiplexedFastq: pframes.exportColumnData(demultiplexedFastqData)
+			demultiplexedFastq: pframes.exportColumnData(demultiplexedFastqData),
+			// ResourceMap[sampleGroupId] -> Stream — model reads via getLogHandle /
+			// getProgressLog("[==MITOOL_PROGRESS==]"). No exportColumnData wrapper
+			// (same as miltenyi mitoolLogs pattern): streams need no export step.
+			mitoolLogs: mitoolLogsData,
+			// ResourceMap[sampleGroupId, reportFormat] -> File — model reads via
+			// getFileHandle for download.
+			reports: pframes.exportColumnData(reportsData)
 		},
 		exports: {
 			demultiplexedFastq: {
 				spec: demultiplexedFastqSpec,
 				data: demultiplexedFastqData
+			},
+			reports: {
+				spec: reportsSpec,
+				data: reportsData
 			}
 		}
 	}

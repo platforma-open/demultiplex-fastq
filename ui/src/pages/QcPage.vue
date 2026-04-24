@@ -6,8 +6,8 @@ import { PlBlockPage } from "@platforma-sdk/ui-vue";
   <PlBlockPage>
     <template #title>Quality Control</template>
     <div :style="{ padding: '16px', color: 'var(--txt-03)' }">
-      Per-group QC table (matched reads, matching rate) will appear here once the reports pipeline
-      is wired.
+      Per-sample matched-reads QC will land here once mitool exposes a record-count CLI — see
+      <code>.meta/mitool-parse-json-report.md</code>.
     </div>
   </PlBlockPage>
 </template>

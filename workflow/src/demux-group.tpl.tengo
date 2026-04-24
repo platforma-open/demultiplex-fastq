@@ -29,13 +29,14 @@ exec := import("@platforma-sdk/workflow-tengo:exec")
 render := import("@platforma-sdk/workflow-tengo:render")
 assets := import("@platforma-sdk/workflow-tengo:assets")
 pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
+pcolumn := import("@platforma-sdk/workflow-tengo:pframes.pcolumn")
 slices := import("@platforma-sdk/workflow-tengo:slices")
 json := import("json")
 text := import("text")
 
 exportTpl := assets.importTemplate(":demux-group-export")
 
-self.defineOutputs("demultiplexedFastq")
+self.defineOutputs("demultiplexedFastq", "mitoolLog", "reports")
 
 mitoolSw := assets.importSoftware("@platforma-open/milaboratories.software-mitool:main")
 
@@ -153,15 +154,23 @@ self.body(func(inputs) {
 	}
 
 	parse = parse.
+		arg("--report").arg("report.txt").saveFile("report.txt").
 		saveFileSet("mics", "^[A-Za-z0-9]+\\.result\\.mic$").
 		saveStdoutStream().
-		saveStderrStream().
 		arg("result.mic").
 		run()
 
+	// Reports PColumn inner axis is [reportFormat]. For v1 we have only txt —
+	// once mitool ships `--json-report` (see .meta/mitool-parse-json-report.md)
+	// we add `parse.arg("--json-report").arg("report.json").saveFile("report.json")`
+	// and `reportsBuilder.add(["json"], parse.getFile("report.json"))`. The
+	// format-axis spec downstream already anticipates both values.
+	reportsBuilder := pcolumn.resourceMapBuilder(1)
+	reportsBuilder.add(["txt"], parse.getFile("report.txt"))
+
 	// Hand the (possibly partial) file-set to the export sub-template. It will
 	// iterate the actual files produced, look up the sample for each barcode, and
-	// build the [sampleId, readIndex] ResourceMap.
+	// build the [sampleId, readIndex] ResourceMap plus [sampleId] matched counts.
 	// Ephemeral: the export template uses awaitState("mics", "ResourceReady") so
 	// it can iterate the actual per-barcode .mic files produced by mitool. Only
 	// ephemeral templates are allowed to await state.
@@ -172,6 +181,8 @@ self.body(func(inputs) {
 	})
 
 	return {
-		demultiplexedFastq: exportResult.output("demultiplexedFastq")
+		demultiplexedFastq: exportResult.output("demultiplexedFastq"),
+		mitoolLog: parse.getStdoutStream(),
+		reports: reportsBuilder.build()
 	}
 })
