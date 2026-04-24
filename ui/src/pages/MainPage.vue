@@ -2,9 +2,11 @@
 import { AgGridVue } from "ag-grid-vue3";
 
 import type { AnyLogHandle } from "@platforma-sdk/model";
-import type { PlAgHeaderComponentParams } from "@platforma-sdk/ui-vue";
+import type { PlAgHeaderComponentParams, PlChartStackedBarSettings } from "@platforma-sdk/ui-vue";
 import {
   AgGridTheme,
+  Gradient,
+  PlAgChartStackedBarCell,
   PlAgOverlayLoading,
   PlAgOverlayNoRows,
   PlAgTextAndButtonCell,
@@ -13,6 +15,9 @@ import {
   PlLogView,
   PlMaskIcon24,
   PlSlideModal,
+  PlTabs,
+  PlTextArea,
+  ReactiveFileContent,
   autoSizeRowNumberColumn,
   createAgGridColDef,
   makeRowNumberColDef,
@@ -60,7 +65,45 @@ type GroupRow = {
   label: string;
   progress: string | undefined;
   logHandle: AnyLogHandle | undefined;
+  stats: { total: number; matched: number } | undefined;
 };
+
+type DetailTab = "logs" | "report";
+
+const detailTabOptions: { value: DetailTab; label: string }[] = [
+  { value: "logs", label: "Logs" },
+  { value: "report", label: "Report" },
+];
+
+// Two-tone matched / unmatched bar. Green (matched) + muted magma (unmatched)
+// mirrors mixcr-clonotyping's alignment stats column palette.
+const matchedColor = Gradient("viridis").getNthOf(2, 5);
+const unmatchedColor = Gradient("magma").getNthOf(2, 9);
+function getMatchedBarSettings(
+  stats: { total: number; matched: number } | undefined,
+): PlChartStackedBarSettings | undefined {
+  if (!stats || !stats.total) return undefined;
+  const matched = stats.matched;
+  const unmatched = Math.max(0, stats.total - matched);
+  const pct = (n: number) => `${((n * 100) / stats.total).toFixed(1)}%`;
+  return {
+    title: "Matched",
+    data: [
+      {
+        label: "Matched",
+        value: matched,
+        color: matchedColor,
+        description: ["Matched", `${matched.toLocaleString()} (${pct(matched)})`].join("\n"),
+      },
+      {
+        label: "Unmatched",
+        value: unmatched,
+        color: unmatchedColor,
+        description: ["Unmatched", `${unmatched.toLocaleString()} (${pct(unmatched)})`].join("\n"),
+      },
+    ],
+  };
+}
 
 const app = useApp();
 
@@ -108,6 +151,22 @@ const completedGroups = computed<Set<string>>(() => {
   return out;
 });
 
+// Per-group txt report blob handle — double-click opens it in the Report tab.
+// `getFileHandle()` returns { handle, size }; ReactiveFileContent expects the
+// raw blob handle, so unwrap here.
+const txtReportByGroup = computed(() => {
+  const rm = app.model.outputs.reports;
+  if (!rm?.data) return {} as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const { key, value } of rm.data) {
+    if (value && String(key[1]) === "txt") {
+      // Handle shape varies (local vs remote); extract .handle if present.
+      out[String(key[0])] = (value as { handle?: unknown }).handle ?? value;
+    }
+  }
+  return out;
+});
+
 // Rows — only populate once a run has been dispatched. `mitoolLogs` is undefined
 // pre-run, so checking it keeps the table empty (→ no "Queued" rows) until the
 // user hits Run. `sampleGroupLabels` alone populates as soon as an input is
@@ -115,6 +174,7 @@ const completedGroups = computed<Set<string>>(() => {
 const rows = computed<GroupRow[]>(() => {
   if (app.model.outputs.mitoolLogs === undefined) return [];
   const labels = app.model.outputs.sampleGroupLabels ?? {};
+  const summary = app.model.outputs.qcGroupSummary ?? {};
   const ids = new Set<string>();
   for (const id of Object.keys(labels)) ids.add(id);
   for (const id of Object.keys(progressByGroup.value)) ids.add(id);
@@ -125,6 +185,7 @@ const rows = computed<GroupRow[]>(() => {
     label: labels[groupId] ?? groupId,
     progress: progressByGroup.value[groupId],
     logHandle: logByGroup.value[groupId],
+    stats: summary[groupId],
   }));
 });
 
@@ -137,11 +198,13 @@ const loadingOverlayParams = computed(() => {
 
 const data = reactive<{
   settingsOpen: boolean;
-  logOpen: boolean;
+  detailOpen: boolean;
+  detailTab: DetailTab;
   selectedGroup: string | undefined;
 }>({
   settingsOpen: app.model.outputs.mitoolLogs === undefined,
-  logOpen: false,
+  detailOpen: false,
+  detailTab: "logs",
   selectedGroup: undefined,
 });
 
@@ -149,10 +212,24 @@ const selectedLogHandle = computed(() =>
   data.selectedGroup ? logByGroup.value[data.selectedGroup] : undefined,
 );
 
-const openLogForRow = (row: GroupRow | undefined) => {
+const selectedReportHandle = computed(() =>
+  data.selectedGroup ? txtReportByGroup.value[data.selectedGroup] : undefined,
+);
+
+// Lazy-fetch the report.txt content for the Report tab. Global LRU cache,
+// auto-retries — any group already visited stays fast on re-open.
+const reactiveFileContent = ReactiveFileContent.useGlobal();
+const selectedReportContent = computed(() => {
+  const handle = selectedReportHandle.value;
+  if (!handle) return undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return reactiveFileContent.getContentString(handle as any)?.value;
+});
+
+const openDetailForRow = (row: GroupRow | undefined) => {
   if (!row) return;
   data.selectedGroup = row.groupId;
-  data.logOpen = true;
+  data.detailOpen = true;
 };
 
 const defaultColumnDef: ColDef = {
@@ -200,12 +277,23 @@ const columnDefs: ColDef<GroupRow>[] = [
       };
     },
   }),
+  createAgGridColDef<GroupRow, unknown>({
+    colId: "matched",
+    headerName: "Matched reads",
+    headerComponentParams: { type: "Text" } satisfies PlAgHeaderComponentParams,
+    flex: 1,
+    cellStyle: { "--ag-cell-horizontal-padding": "12px" },
+    cellRendererSelector: (cellData) => ({
+      component: PlAgChartStackedBarCell,
+      params: { value: getMatchedBarSettings(cellData.data?.stats) },
+    }),
+  }),
 ];
 
 const gridOptions: GridOptions<GroupRow> = {
   getRowId: (row) => row.data.groupId,
-  onRowDoubleClicked: (e: { data?: GroupRow }) => openLogForRow(e.data),
-  components: { PlAgTextAndButtonCell },
+  onRowDoubleClicked: (e: { data?: GroupRow }) => openDetailForRow(e.data),
+  components: { PlAgTextAndButtonCell, PlAgChartStackedBarCell },
 };
 </script>
 
@@ -239,17 +327,37 @@ const gridOptions: GridOptions<GroupRow> = {
     <template #title>Settings</template>
     <SettingsPanel />
   </PlSlideModal>
-  <PlSlideModal v-model="data.logOpen" width="60%">
+  <PlSlideModal v-model="data.detailOpen" width="60%">
     <template #title>
-      mitool parse log —
+      Sample Group —
       {{
         data.selectedGroup
           ? (app.model.outputs.sampleGroupLabels?.[data.selectedGroup] ?? data.selectedGroup)
           : "..."
       }}
     </template>
-    <PlLogView v-if="selectedLogHandle" :log-handle="selectedLogHandle" />
-    <div v-else :style="{ padding: '16px', color: 'var(--txt-03)' }">No log yet.</div>
+    <PlTabs v-model="data.detailTab" :options="detailTabOptions" />
+    <div :style="{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }">
+      <template v-if="data.detailTab === 'logs'">
+        <PlLogView v-if="selectedLogHandle" :log-handle="selectedLogHandle" />
+        <div v-else :style="{ padding: '16px', color: 'var(--txt-03)' }">No log yet.</div>
+      </template>
+      <template v-else-if="data.detailTab === 'report'">
+        <PlTextArea
+          v-if="selectedReportContent !== undefined"
+          :model-value="selectedReportContent"
+          readonly
+          :rows="30"
+          :style="{ flex: 1, fontFamily: 'monospace', whiteSpace: 'pre' }"
+        />
+        <div v-else-if="selectedReportHandle" :style="{ padding: '16px', color: 'var(--txt-03)' }">
+          Loading report…
+        </div>
+        <div v-else :style="{ padding: '16px', color: 'var(--txt-03)' }">
+          Report not yet available — waits until mitool parse finishes for this group.
+        </div>
+      </template>
+    </div>
   </PlSlideModal>
 </template>
 

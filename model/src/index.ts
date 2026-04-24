@@ -145,6 +145,16 @@ export const platforma = BlockModelV3.create(dataModel)
     return rows;
   })
 
+  // Per-group { total, matched } — drives the matched-reads bar column in
+  // MainPage. Raw map, keyed by sampleGroupId. Total comes from mitool's
+  // parseReport.total (every read seen), matched from parseReport.matched
+  // (reads routed to a sample writer).
+  .output("qcGroupSummary", (ctx) =>
+    ctx.outputs
+      ?.resolve({ field: "qcGroupSummary", allowPermanentAbsence: true })
+      ?.getDataAsJson<Record<string, { total: number; matched: number }>>(),
+  )
+
   // Human-readable sampleGroupId and sampleId labels (if samples-and-data
   // published a label column on those axes). MainPage/QcPage render these.
   .output("sampleGroupLabels", (ctx) => {

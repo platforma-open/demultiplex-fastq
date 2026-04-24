@@ -23,7 +23,7 @@ maps := import("@platforma-sdk/workflow-tengo:maps")
 pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
 json := import("json")
 
-self.defineOutputs("qcData")
+self.defineOutputs("qcData", "qcGroupSummary")
 
 // Outer maps ready + each inner value ready. Mirrors export-by-sample.
 self.awaitState("reportJsonByGroup", "ResourceReady")
@@ -50,8 +50,11 @@ self.body(func(inputs) {
 		b2sByGroupKey[groupKey] = fieldRef.getValue().getDataAsJson()
 	}
 
-	// Walk per-group JSON reports, extract perSampleMatched, route back to sampleId.
+	// Walk per-group JSON reports, extract perSampleMatched + group totals.
+	// flat           → per-sample matched (feeds the QC Report table).
+	// groupSummary   → per-group {total, matched} (feeds the main-table bar col).
 	flat := {}
+	groupSummary := {}
 	reportInputs := reportJsonByGroup.inputs()
 	for groupKey in maps.getKeys(reportInputs) {
 		fieldRef := reportInputs[groupKey]
@@ -75,9 +78,18 @@ self.body(func(inputs) {
 		ll.assert(is_map(report), "group %s report.json did not decode to a map", groupKey)
 		parseReport := report.parseReport
 		ll.assert(is_map(parseReport), "group %s report.json missing parseReport object", groupKey)
+
+		// Per-group totals: used by the main-table bar renderer. Always recorded,
+		// even when perSampleMatched is absent (older mitool / no Sample tag).
+		groupSummary[groupKey] = {
+			total: parseReport.total,
+			matched: parseReport.matched
+		}
+
 		perSample := parseReport.perSampleMatched
 		if is_undefined(perSample) {
-			// mitool < 2.3.1-57 or pattern with no Sample-type tags — no data to emit.
+			// mitool < 2.3.1-57 or pattern with no Sample-type tags — no per-sample
+			// data to emit, but group summary above is still valid.
 			continue
 		}
 		ll.assert(is_array(perSample), "group %s perSampleMatched is not an array", groupKey)
@@ -110,6 +122,10 @@ self.body(func(inputs) {
 		data: flat
 	}
 	return {
-		qcData: smart.createValueResource(pConstants.RTYPE_P_COLUMN_DATA_JSON, json.encode(payload))
+		qcData: smart.createValueResource(pConstants.RTYPE_P_COLUMN_DATA_JSON, json.encode(payload)),
+		// Plain JSON resource — consumed by the model as a raw map keyed by
+		// sampleGroupId. No PColumn wrapping: this feeds a bar cell, not a
+		// downstream block.
+		qcGroupSummary: smart.createJsonResource(groupSummary)
 	}
 })

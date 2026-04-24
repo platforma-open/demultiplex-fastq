@@ -25,7 +25,8 @@ self.defineOutputs(
 	"demultiplexedFastqSpec", "demultiplexedFastqData",
 	"mitoolLogsSpec", "mitoolLogsData",
 	"reportsSpec", "reportsData",
-	"qcSpec", "qcData"
+	"qcSpec", "qcData",
+	"qcGroupSummary"
 )
 
 self.awaitState("bundle", "PColumnBundleWithPartitions")
@@ -312,6 +313,7 @@ self.body(func(inputs) {
 		reportsSpec: reportsSpec,
 		reportsData: reportsFlat.output("flat"),
 		qcSpec: qcSpec,
-		qcData: qcResult.output("qcData")
+		qcData: qcResult.output("qcData"),
+		qcGroupSummary: qcResult.output("qcGroupSummary")
 	}
 })

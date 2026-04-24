@@ -52,6 +52,7 @@ wf.body(func(args) {
 	reportsData := demuxResult.output("reportsData")
 	qcSpec := demuxResult.output("qcSpec")
 	qcData := demuxResult.output("qcData")
+	qcGroupSummary := demuxResult.output("qcGroupSummary")
 
 	return {
 		outputs: {
@@ -65,7 +66,10 @@ wf.body(func(args) {
 			reports: pframes.exportColumnData(reportsData),
 			// PColumnData/Json keyed [sampleGroupId, sampleId] → matchedReads.
 			// Model reads via getDataAsJson to power the QC table.
-			qc: qcData
+			qc: qcData,
+			// Plain JSON resource: { [groupId]: { total, matched } } — drives the
+			// matched/total bar cell in MainPage's per-group table.
+			qcGroupSummary: qcGroupSummary
 		},
 		exports: {
 			demultiplexedFastq: {
