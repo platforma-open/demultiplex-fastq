@@ -10,7 +10,7 @@ The block runs `mitool parse` per sample group to assign every read to a barcode
 
 - **Multiplexed FASTQ dataset.** A FASTQ dataset linked to a sample-group structure (typically produced by the Samples & Data block when sample sheets are imported alongside pooled sequencing files).
 - **Sample barcode column.** A metadata column listing the barcode sequence for each sample. Auto-suggested when a metadata column with "barcode" in its label is available.
-- **Tag pattern.** A read decomposition rule in the [mitool pattern grammar](https://github.com/milaboratory/mitool). The default `^{SMPL1}N{0:2}(R1:*)\^N{20}(R2:*)` reads the per-sample barcode from the start of R1, allows up to two spacer bases, captures the rest of R1 as the output read, and skips a 20-base UMI/adapter at the start of R2 before capturing the remainder. The `{SMPL1}` placeholder is filled with each sample's barcode at run time.
+- **Tag pattern.** A read decomposition rule in the [tag pattern grammar](https://mixcr.com/mixcr/reference/ref-tag-pattern/). The default `^{SMPL1}N{0:2}(R1:*)\^N{20}(R2:*)` reads the per-sample barcode from the start of R1, allows up to two spacer bases, captures the rest of R1 as the output read, and skips a 20-base UMI/adapter at the start of R2 before capturing the remainder. The `{SMPL1}` placeholder is filled with each sample's barcode at run time.
 
 # Outputs
 
