@@ -129,7 +129,7 @@ self.body(func(inputs) {
 		type: "milaboratories.demux",
 		id: blockId,
 		importance: 10,
-		label: "Demultiplex FASTQ"
+		label: "FASTQ Demultiplexing"
 	})
 
 	demuxedFastqSpec := blockTrace.inject({
@@ -280,7 +280,7 @@ self.body(func(inputs) {
 				type: "milaboratories.demux",
 				id: blockId,
 				importance: 10,
-				label: "Demultiplex FASTQ"
+				label: "FASTQ Demultiplexing"
 			}],
 			extra: {
 				perGroupData: perGroupData,

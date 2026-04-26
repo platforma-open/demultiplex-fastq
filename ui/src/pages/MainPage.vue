@@ -305,7 +305,7 @@ const gridOptions: GridOptions<GroupRow> = {
 
 <template>
   <PlBlockPage>
-    <template #title>Demultiplex FASTQ</template>
+    <template #title>FASTQ Demultiplexing</template>
     <template #append>
       <PlBtnGhost @click.stop="data.settingsOpen = true">
         Settings

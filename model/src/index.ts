@@ -183,7 +183,7 @@ export const platforma = BlockModelV3.create(dataModel)
     return ctx.resultPool.findLabelsForColumnAxis(spec, 1);
   })
 
-  .title(() => "Demultiplex FASTQ")
+  .title(() => "FASTQ Demultiplexing")
 
   .sections(() => [
     { type: "link" as const, href: "/" as const, label: "Main" },

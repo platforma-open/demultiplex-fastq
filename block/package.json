@@ -24,7 +24,7 @@
       "ui": "@platforma-open/milaboratories.demultiplex-fastq.ui/dist"
     },
     "meta": {
-      "title": "Demultiplex FASTQ",
+      "title": "FASTQ Demultiplexing",
       "logo": "file:../logos/block-logo.png",
       "url": "https://github.com/platforma-open/demultiplex-fastq",
       "support": "mailto:support@milaboratories.com",
