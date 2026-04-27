@@ -1,0 +1,327 @@
+// Ephemeral orchestration template.
+// - Awaits the bundle with partitions so the linker JSON and FASTQ partition refs
+//   are materialised.
+// - Parses linker + barcode JSON here (once) and builds a per-group
+//   {groupId -> [[barcode, sampleId], ...]} map.
+// - Dispatches pframes.processColumn over the FASTQ dataset; the per-group body
+//   (demux-group) runs `mitool parse` only, emitting per-group mics + metadata.
+// - Feeds the aggregated per-group outputs to export-by-sample, which collapses
+//   across groups and runs one multi-input `mitool export-fastq` per sampleId.
+
+self := import("@platforma-sdk/workflow-tengo:tpl")
+render := import("@platforma-sdk/workflow-tengo:render")
+assets := import("@platforma-sdk/workflow-tengo:assets")
+pframes := import("@platforma-sdk/workflow-tengo:pframes")
+pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
+pSpec := import("@platforma-sdk/workflow-tengo:pframes.spec")
+ll := import("@platforma-sdk/workflow-tengo:ll")
+json := import("json")
+
+demuxGroupTpl := assets.importTemplate(":demux-group")
+exportBySampleTpl := assets.importTemplate(":export-by-sample")
+flattenWithGroupTpl := assets.importTemplate(":flatten-with-group")
+qcTpl := assets.importTemplate(":qc")
+
+self.defineOutputs(
+	"demultiplexedFastqSpec", "demultiplexedFastqData",
+	"mitoolLogsSpec", "mitoolLogsData",
+	"reportsSpec", "reportsData",
+	"qcSpec", "qcData",
+	"qcGroupSummary"
+)
+
+self.awaitState("bundle", "PColumnBundleWithPartitions")
+self.awaitState("barcodeData", "ResourceReady")
+self.awaitState("params", "ResourceReady")
+
+self.body(func(inputs) {
+	bundle := inputs.bundle
+	barcodeData := inputs.barcodeData
+	params := inputs.params
+	blockId := params.blockId
+	tagPattern := params.tagPattern
+	limitInput := params.limitInput
+
+	// The anchor IS the linker — its .data is the JSON content (partitions awaited).
+	linker := bundle.getColumn("main")
+
+	// FASTQ dataset resolved as a query against the linker's first axis.
+	fastqCols := bundle.getColumns("fastq")
+	ll.assert(!is_undefined(fastqCols) && len(fastqCols) == 1,
+		"expected exactly one fastq dataset matching the linker, got %d", len(fastqCols))
+	fastq := fastqCols[0]
+
+	sampleGroupIdAxisSpec := linker.spec.axesSpec[0]
+	sampleIdAxisSpec := linker.spec.axesSpec[1]
+	readIndexAxisSpec := fastq.spec.axesSpec[1]
+
+	// Both the linker and the barcode metadata column are PColumn/Json resources
+	// produced by samples-and-data. The JSON payload is a flat map:
+	//   { "[<groupId>,<sampleId>]": "<label>", ... }  (linker, 2 axes)
+	//   { "[<sampleId>]":           "<barcode>", ... } (metadata, 1 axis)
+	// Some producers wrap it as { data: {...}, keyLength: N }. We accept either
+	// but assert the underlying resource is PColumnData/Json so we fail loudly
+	// on unexpected shapes.
+	readJsonPColumn := func(name, resource) {
+		ll.assert(!is_undefined(resource), "%s resource is undefined", name)
+		ll.assert(resource.checkResourceType(pConstants.RTYPE_P_COLUMN_DATA_JSON),
+			"%s must be PColumnData/Json, got a different resource type", name)
+		decoded := resource.getDataAsJson()
+		ll.assert(is_map(decoded), "%s JSON payload is not a map", name)
+		if !is_undefined(decoded.data) && is_map(decoded.data) {
+			return decoded.data
+		}
+		return decoded
+	}
+
+	// Linker: key [groupId, sampleId] -> sampleLabel. Collapse to groupId -> [sampleId, ...].
+	linkerMap := readJsonPColumn("linker", linker.data)
+	ll.assert(len(linkerMap) > 0, "linker PColumn has no entries — nothing to demultiplex")
+	groupToSamples := {}
+	for encodedKey, _ in linkerMap {
+		keyArr := json.decode(encodedKey)
+		ll.assert(is_array(keyArr) && len(keyArr) == 2,
+			"invalid linker key (expected 2-tuple [groupId, sampleId]): %v", encodedKey)
+		groupId := string(keyArr[0])
+		sampleId := string(keyArr[1])
+		if is_undefined(groupToSamples[groupId]) {
+			groupToSamples[groupId] = []
+		}
+		groupToSamples[groupId] = append(groupToSamples[groupId], sampleId)
+	}
+	ll.assert(len(groupToSamples) > 0, "linker produced zero sample groups")
+
+	// Barcode source: key [sampleId] -> barcode string.
+	barcodeMap := readJsonPColumn("barcode source", barcodeData)
+	ll.assert(len(barcodeMap) > 0, "barcode source PColumn has no entries")
+	sampleToBarcode := {}
+	for encodedKey, val in barcodeMap {
+		keyArr := json.decode(encodedKey)
+		ll.assert(is_array(keyArr) && len(keyArr) == 1,
+			"invalid barcode key (expected 1-tuple [sampleId]): %v", encodedKey)
+		sampleToBarcode[string(keyArr[0])] = string(val)
+	}
+
+	// Per-group [[barcode, sampleId], ...] — demux-group walks this after lex-sort.
+	perGroupData := {}
+	for groupId, sampleIds in groupToSamples {
+		entries := []
+		for sampleId in sampleIds {
+			bc := sampleToBarcode[sampleId]
+			if is_undefined(bc) || bc == "" {
+				ll.panic("No barcode found for sample %s in group %s — check that the selected barcode metadata column has a value for every sample in the linker", sampleId, groupId)
+			}
+			entries = append(entries, [bc, sampleId])
+		}
+		ll.assert(len(entries) > 0, "sample group %s has zero samples with barcodes", groupId)
+		perGroupData[groupId] = entries
+	}
+	ll.assert(len(perGroupData) > 0, "perGroupData is empty — refusing to dispatch demultiplexing over empty input")
+
+	// Provenance trace for user-facing outputs. The fastq input spec is the
+	// data-lineage root (the column being "processed"), and this step tags the
+	// chain as the demultiplex stage. `blockTrace.inject(spec)` returns a new
+	// spec with pl7.app/trace set — no hardcoded annotation key in this file.
+	// The internal columns produced by processColumn get the same step via
+	// its own `traceSteps` option below; keeping both on the same upstream
+	// (fastq.spec) keeps internal and external trace chains consistent.
+	blockTrace := pSpec.makeTrace(fastq.spec, {
+		type: "milaboratories.demux",
+		id: blockId,
+		importance: 10,
+		label: "FASTQ Demultiplexing"
+	})
+
+	demuxedFastqSpec := blockTrace.inject({
+		kind: "PColumn",
+		name: "pl7.app/sequencing/data",
+		domain: {
+			"pl7.app/fileExtension": "fastq.gz",
+			"pl7.app/block": blockId,
+			"pl7.app/dataset": "demultiplexed"
+		},
+		valueType: "File",
+		annotations: {
+			"pl7.app/label": "Demultiplexed FASTQ"
+		},
+		axesSpec: [sampleIdAxisSpec, readIndexAxisSpec]
+	})
+
+	// Per-group mitool parse log (stderr merged into stdout via printErrStreamToStdout
+	// in demux-group). processColumn stacks the single Stream each group emits
+	// into ResourceMap[sampleGroupId] -> Stream.
+	mitoolLogSpec := {
+		kind: "PColumn",
+		name: "milaboratories.demux/log",
+		domain: {
+			"pl7.app/block": blockId
+		},
+		valueType: "Log",
+		annotations: {
+			"pl7.app/label": "mitool parse log"
+		},
+		axesSpec: [sampleGroupIdAxisSpec]
+	}
+
+	// Per-group parse reports. demux-group emits ResourceMap[reportFormat] with
+	// txt + json entries. After flatten-with-group the PColumn is keyed
+	// [sampleGroupId, reportFormat].
+	reportFormatAxisSpec := {
+		type: "String",
+		name: "milaboratories.demux/reportFormat",
+		annotations: {
+			"pl7.app/label": "Report format"
+		}
+	}
+	reportsSpec := {
+		kind: "PColumn",
+		name: "milaboratories.demux/report",
+		domain: {
+			"pl7.app/block": blockId
+		},
+		valueType: "File",
+		annotations: {
+			"pl7.app/label": "Parse report"
+		},
+		axesSpec: [sampleGroupIdAxisSpec, reportFormatAxisSpec]
+	}
+
+	// Internal per-group outputs consumed by export-by-sample. Specs are
+	// required by processColumn but not user-facing — none of these three
+	// columns are published to the result pool.
+	micsSpec := {
+		kind: "PColumn",
+		name: "milaboratories.demux/mics",
+		domain: { "pl7.app/block": blockId },
+		valueType: "File",
+		axesSpec: [sampleGroupIdAxisSpec]
+	}
+	barcodeToSampleSpec := {
+		kind: "PColumn",
+		name: "milaboratories.demux/barcodeToSample",
+		domain: { "pl7.app/block": blockId },
+		valueType: "String",
+		axesSpec: [sampleGroupIdAxisSpec]
+	}
+	isPairedSpec := {
+		kind: "PColumn",
+		name: "milaboratories.demux/isPaired",
+		domain: { "pl7.app/block": blockId },
+		valueType: "String",
+		axesSpec: [sampleGroupIdAxisSpec]
+	}
+	reportJsonContentSpec := {
+		kind: "PColumn",
+		name: "milaboratories.demux/reportJsonContent",
+		domain: { "pl7.app/block": blockId },
+		valueType: "String",
+		axesSpec: [sampleGroupIdAxisSpec]
+	}
+
+	// User-facing per-sample QC: matched reads for each sample in each group.
+	// Populated by qc.tpl.tengo from parseReport.perSampleMatched in each group's
+	// JSON report (mitool 2.3.1-57+). The ephemeral produces a PColumnData/Json
+	// keyed [sampleGroupId, sampleId] → matchedReads (Long).
+	qcSpec := blockTrace.inject({
+		kind: "PColumn",
+		name: "milaboratories.demux/matchedReads",
+		domain: {
+			"pl7.app/block": blockId
+		},
+		valueType: "Long",
+		annotations: {
+			"pl7.app/label": "Matched reads"
+		},
+		axesSpec: [sampleGroupIdAxisSpec, sampleIdAxisSpec]
+	})
+
+	// processColumn outputs. `type: "Resource"` per output → outer
+	// ResourceMap[groupId] whose values are whatever resource each group emits.
+	// Note: no stepCache. The per-group body's content hash already keys the result;
+	// hash_override + step cache had caused stale-result traps (returning cached
+	// broken resources across edits).
+	demuxOutputs := [{
+		type: "Resource",
+		spec: mitoolLogSpec,
+		name: "mitoolLog"
+	}, {
+		type: "Resource",
+		spec: reportsSpec,
+		name: "reports"
+	}, {
+		type: "Resource",
+		spec: micsSpec,
+		name: "mics"
+	}, {
+		type: "Resource",
+		spec: barcodeToSampleSpec,
+		name: "barcodeToSample"
+	}, {
+		type: "Resource",
+		spec: isPairedSpec,
+		name: "isPaired"
+	}, {
+		type: "Resource",
+		spec: reportJsonContentSpec,
+		name: "reportJsonContent"
+	}]
+
+	perGroupResult := pframes.processColumn(
+		{ spec: fastq.spec, data: fastq.data },
+		demuxGroupTpl,
+		demuxOutputs,
+		{
+			aggregate: [
+				{ name: "pl7.app/sequencing/readIndex", optional: true }
+			],
+			passAggregationAxesNames: true,
+			passKey: true,
+			traceSteps: [{
+				type: "milaboratories.demux",
+				id: blockId,
+				importance: 10,
+				label: "FASTQ Demultiplexing"
+			}],
+			extra: {
+				perGroupData: perGroupData,
+				tagPattern: tagPattern,
+				limitInput: limitInput
+			}
+		}
+	)
+
+	// Cross-group fastq export: one multi-input export-fastq per sampleId,
+	// producing a flat ResourceMap[sampleId, readIndex] -> File directly.
+	exportResult := render.createEphemeral(exportBySampleTpl, {
+		nestedMics: perGroupResult.outputData("mics"),
+		barcodeToSampleByGroup: perGroupResult.outputData("barcodeToSample"),
+		isPairedByGroup: perGroupResult.outputData("isPaired")
+	})
+
+	// reports: `type: "Resource"` → ResourceMap[groupId] -> ResourceMap[format].
+	// exportColumnData consumes flat ResourceMaps, so flatten-with-group
+	// collapses to ResourceMap[groupId, reportFormat].
+	reportsFlat := render.createEphemeral(flattenWithGroupTpl, {
+		nestedMap: perGroupResult.outputData("reports"),
+		flatKeyLength: 2
+	})
+
+	// QC: decode each group's report.json, map perSampleMatched back to sampleIds,
+	// emit PColumnData/Json keyed [groupId, sampleId] → matchedReads.
+	qcResult := render.createEphemeral(qcTpl, {
+		reportJsonByGroup: perGroupResult.outputData("reportJsonContent"),
+		barcodeToSampleByGroup: perGroupResult.outputData("barcodeToSample")
+	})
+
+	return {
+		demultiplexedFastqSpec: demuxedFastqSpec,
+		demultiplexedFastqData: exportResult.output("demultiplexedFastqData"),
+		mitoolLogsSpec: mitoolLogSpec,
+		mitoolLogsData: perGroupResult.outputData("mitoolLog"),
+		reportsSpec: reportsSpec,
+		reportsData: reportsFlat.output("flat"),
+		qcSpec: qcSpec,
+		qcData: qcResult.output("qcData"),
+		qcGroupSummary: qcResult.output("qcGroupSummary")
+	}
+})

@@ -15,6 +15,9 @@ catalogs:
     '@milaboratories/ts-configs':
       specifier: 1.2.3
       version: 1.2.3
+    '@platforma-open/milaboratories.software-mitool':
+      specifier: 2.3.1-58-main
+      version: 2.3.1-58-main
     '@platforma-sdk/block-tools':
       specifier: 2.7.7
       version: 2.7.7
@@ -33,6 +36,12 @@ catalogs:
     '@platforma-sdk/workflow-tengo':
       specifier: 5.13.1
       version: 5.13.1
+    ag-grid-enterprise:
+      specifier: ~34.1.2
+      version: 34.1.2
+    ag-grid-vue3:
+      specifier: ~34.1.2
+      version: 34.1.2
     shx:
       specifier: 0.4.0
       version: 0.4.0
@@ -129,9 +138,18 @@ importers:
       '@platforma-open/milaboratories.demultiplex-fastq.model':
         specifier: workspace:*
         version: link:../model
+      '@platforma-sdk/model':
+        specifier: 'catalog:'
+        version: 1.64.0
       '@platforma-sdk/ui-vue':
         specifier: 'catalog:'
         version: 1.64.0(@bytecodealliance/preview2-shim@0.17.8)(typescript@5.6.3)
+      ag-grid-enterprise:
+        specifier: 'catalog:'
+        version: 34.1.2
+      ag-grid-vue3:
+        specifier: 'catalog:'
+        version: 34.1.2(vue@3.5.25(typescript@5.6.3))
       typescript:
         specifier: '*'
         version: 5.6.3
@@ -154,6 +172,9 @@ importers:
 
   workflow:
     dependencies:
+      '@platforma-open/milaboratories.software-mitool':
+        specifier: 'catalog:'
+        version: 2.3.1-58-main
       '@platforma-sdk/workflow-tengo':
         specifier: 'catalog:'
         version: 5.13.1
@@ -1263,6 +1284,9 @@ packages:
   '@pkgjs/parseargs@0.11.0':
     resolution: {integrity: sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg==}
     engines: {node: '>=14'}
+
+  '@platforma-open/milaboratories.software-mitool@2.3.1-58-main':
+    resolution: {integrity: sha512-uw0V4lFlkTC4zVKE5n6o1P0N9QDmoMkFl+dfPZi3r0mMRyO+bxoeHgBXiJfudEakAMY8tDYrELCD7CBs0Lsw/A==}
 
   '@platforma-open/milaboratories.software-ptabler.schema@1.14.6':
     resolution: {integrity: sha512-X9e81kETOcYQIx8n96cs7o1LvM3A1U8jeaaJJXoWuakMWP7+NVqK7rIdfcWPL5wIpjAKVpBUbuuHNctrzy23Tw==}
@@ -5498,7 +5522,7 @@ snapshots:
       oxfmt: 0.35.0
       oxlint: 1.43.0
       rolldown: 1.0.0-rc.16
-      rolldown-plugin-dts: 0.23.2(rolldown@1.0.0-rc.16)(typescript@5.9.3)(vue-tsc@3.2.6(typescript@5.9.3))
+      rolldown-plugin-dts: 0.23.2(rolldown@1.0.0-rc.16)(typescript@5.9.3)(vue-tsc@3.2.6(typescript@5.6.3))
       rollup-plugin-copy: 3.5.0
       rollup-plugin-sourcemaps2: 0.5.6(@types/node@25.3.2)(rollup@4.53.3)
       typescript: 5.9.3
@@ -5538,7 +5562,7 @@ snapshots:
       oxfmt: 0.35.0
       oxlint: 1.43.0
       rolldown: 1.0.0-rc.16
-      rolldown-plugin-dts: 0.23.2(rolldown@1.0.0-rc.16)(typescript@5.9.3)(vue-tsc@3.2.6(typescript@5.9.3))
+      rolldown-plugin-dts: 0.23.2(rolldown@1.0.0-rc.16)(typescript@5.9.3)(vue-tsc@3.2.6(typescript@5.6.3))
       rollup-plugin-copy: 3.5.0
       rollup-plugin-sourcemaps2: 0.5.6(@types/node@25.3.2)(rollup@4.53.3)
       typescript: 5.9.3
@@ -5896,6 +5920,8 @@ snapshots:
 
   '@pkgjs/parseargs@0.11.0':
     optional: true
+
+  '@platforma-open/milaboratories.software-mitool@2.3.1-58-main': {}
 
   '@platforma-open/milaboratories.software-ptabler.schema@1.14.6':
     dependencies:
@@ -8281,7 +8307,7 @@ snapshots:
     dependencies:
       glob: 10.4.5
 
-  rolldown-plugin-dts@0.23.2(rolldown@1.0.0-rc.16)(typescript@5.9.3)(vue-tsc@3.2.6(typescript@5.9.3)):
+  rolldown-plugin-dts@0.23.2(rolldown@1.0.0-rc.16)(typescript@5.9.3)(vue-tsc@3.2.6(typescript@5.6.3)):
     dependencies:
       '@babel/generator': 8.0.0-rc.3
       '@babel/helper-validator-identifier': 8.0.0-rc.3

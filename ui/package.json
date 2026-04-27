@@ -11,7 +11,10 @@
   },
   "dependencies": {
     "@platforma-open/milaboratories.demultiplex-fastq.model": "workspace:*",
-    "@platforma-sdk/ui-vue": "catalog:"
+    "@platforma-sdk/model": "catalog:",
+    "@platforma-sdk/ui-vue": "catalog:",
+    "ag-grid-enterprise": "catalog:",
+    "ag-grid-vue3": "catalog:"
   },
   "devDependencies": {
     "@milaboratories/ts-builder": "catalog:",

@@ -1,0 +1,78 @@
+// Flattens a nested [groupId] -> ResourceMap[innerKey...] into a single
+// ResourceMap[groupId, innerKey...] — preserving the outer groupId as part
+// of the composite key. Mirrors flatten.tpl.tengo's structure but keeps the
+// outer axis instead of collapsing it.
+//
+// Used for `reports` ([groupId, reportFormat]) and `matchedCounts`
+// ([groupId, sampleId]) — both produced by pframes.processColumn with
+// `type: "Resource"`, where each per-group body returns a ResourceMap[inner].
+//
+// Ephemeral so we can awaitState on both the outer map AND every nested
+// per-group map before iterating. A pure/light template would run as soon
+// as the outer map is referenced, risking partial iteration if a group's
+// inner ResourceMap isn't yet locked.
+//
+// Inputs:
+//   nestedMap:         outer ResourceMap[groupId] -> inner ResourceMap
+//   flatKeyLength:     JSON integer — length of the output key (groupKeyLen + innerKeyLen)
+
+self := import("@platforma-sdk/workflow-tengo:tpl")
+smart := import("@platforma-sdk/workflow-tengo:smart")
+pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
+maps := import("@platforma-sdk/workflow-tengo:maps")
+ll := import("@platforma-sdk/workflow-tengo:ll")
+json := import("json")
+
+self.defineOutputs("flat")
+
+self.awaitState("nestedMap", "ResourceReady")
+self.awaitState("nestedMap", { wildcard: "*" }, "ResourceReady")
+self.awaitState("flatKeyLength", "ResourceReady")
+
+self.body(func(inputs) {
+	nestedMap := inputs.nestedMap
+	flatKeyLength := inputs.flatKeyLength
+
+	if is_undefined(nestedMap) || !smart.isResource(nestedMap) {
+		return { flat: smart.createNullResource() }
+	}
+
+	if !nestedMap.checkResourceType(pConstants.RTYPE_P_COLUMN_DATA_RESOURCE_MAP) {
+		return { flat: smart.createNullResource() }
+	}
+
+	flatBuilder := smart.structBuilder(
+		pConstants.RTYPE_P_COLUMN_DATA_RESOURCE_MAP,
+		json.encode({ keyLength: flatKeyLength })
+	)
+
+	groupInputs := nestedMap.inputs()
+	for groupKey in maps.getKeys(groupInputs) {
+		groupRef := groupInputs[groupKey]
+		if groupRef.isErrorSet() {
+			ll.panic("group %s produced an error", groupKey)
+		}
+		groupValue := groupRef.getValue()
+		if !smart.isResource(groupValue) {
+			continue
+		}
+		if !groupValue.checkResourceType(pConstants.RTYPE_P_COLUMN_DATA_RESOURCE_MAP) {
+			continue
+		}
+		// groupKey is already a JSON-encoded array e.g. `["g1"]`. Inner keys are
+		// also JSON-encoded arrays e.g. `["s1"]`. Combine into `["g1","s1"]`.
+		groupKeyArr := json.decode(groupKey)
+		ll.assert(is_array(groupKeyArr), "outer key is not an array: %v", groupKey)
+		nestedInputs := groupValue.inputs()
+		for innerKey in maps.getKeys(nestedInputs) {
+			innerKeyArr := json.decode(innerKey)
+			ll.assert(is_array(innerKeyArr), "inner key is not an array: %v", innerKey)
+			combined := append(groupKeyArr, innerKeyArr...)
+			flatBuilder.createInputField(json.encode(combined)).set(nestedInputs[innerKey])
+		}
+	}
+
+	return {
+		flat: flatBuilder.lockAndBuild()
+	}
+})

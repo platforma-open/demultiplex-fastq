@@ -1,17 +1,89 @@
-// "hello world"
 wf := import("@platforma-sdk/workflow-tengo:workflow")
-exec := import("@platforma-sdk/workflow-tengo:exec")
-assets:= import("@platforma-sdk/workflow-tengo:assets")
+render := import("@platforma-sdk/workflow-tengo:render")
+ll := import("@platforma-sdk/workflow-tengo:ll")
+assets := import("@platforma-sdk/workflow-tengo:assets")
+pframes := import("@platforma-sdk/workflow-tengo:pframes")
+smart := import("@platforma-sdk/workflow-tengo:smart")
+
+demuxProcessTpl := assets.importTemplate(":demux-process")
 
 wf.body(func(args) {
-	tengoMessage := "Hello from Tengo, " + args.name + "!"
+	ll.assert(!is_undefined(args.inputRef), "sample groups linker is required")
+	ll.assert(!is_undefined(args.barcodeSourceRef), "barcode source column is required")
+	ll.assert(!is_undefined(args.tagPattern) && args.tagPattern != "", "tag pattern is required")
+
+	blockId := wf.blockId().getDataAsJson()
+
+	// Single anchor: the linker. The multiplexed FASTQ dataset is resolved as a
+	// query against it (same block + dataset domain, matching axis 0). The barcode
+	// source is already a user-picked ref — resolved separately below.
+	bundleBuilder := wf.createPBundleBuilder()
+	bundleBuilder.addAnchor("main", args.inputRef)
+	bundleBuilder.addMulti({
+		axes: [
+			{ anchor: "main", idx: 0 },
+			{ name: "pl7.app/sequencing/readIndex", type: "String" }
+		],
+		name: "pl7.app/sequencing/data",
+		domain: {
+			"pl7.app/block": { anchor: "main" },
+			"pl7.app/dataset": { anchor: "main" }
+		}
+	}, "fastq")
+	bundle := bundleBuilder.build()
+
+	// Barcode source is a user-picked PlRef — a plain column resolve, no bundle.
+	barcodeSource := wf.resolve(args.barcodeSourceRef)
+
+	demuxResult := render.createEphemeral(demuxProcessTpl, {
+		bundle: bundle,
+		barcodeData: barcodeSource.data,
+		params: smart.createJsonResource({
+			blockId: blockId,
+			tagPattern: args.tagPattern,
+			limitInput: args.limitInput
+		})
+	})
+
+	demultiplexedFastqSpec := demuxResult.output("demultiplexedFastqSpec")
+	demultiplexedFastqData := demuxResult.output("demultiplexedFastqData")
+	mitoolLogsData := demuxResult.output("mitoolLogsData")
+	reportsSpec := demuxResult.output("reportsSpec")
+	reportsData := demuxResult.output("reportsData")
+	qcSpec := demuxResult.output("qcSpec")
+	qcData := demuxResult.output("qcData")
+	qcGroupSummary := demuxResult.output("qcGroupSummary")
 
 	return {
 		outputs: {
-			tengoMessage: tengoMessage
+			demultiplexedFastq: pframes.exportColumnData(demultiplexedFastqData),
+			// ResourceMap[sampleGroupId] -> Stream — model reads via getLogHandle /
+			// getProgressLog("[==MITOOL_PROGRESS==]"). No exportColumnData wrapper
+			// (same as miltenyi mitoolLogs pattern): streams need no export step.
+			mitoolLogs: mitoolLogsData,
+			// ResourceMap[sampleGroupId, reportFormat] -> File — model reads via
+			// getFileHandle for download.
+			reports: pframes.exportColumnData(reportsData),
+			// PColumnData/Json keyed [sampleGroupId, sampleId] → matchedReads.
+			// Model reads via getDataAsJson to power the QC table.
+			qc: qcData,
+			// Plain JSON resource: { [groupId]: { total, matched } } — drives the
+			// matched/total bar cell in MainPage's per-group table.
+			qcGroupSummary: qcGroupSummary
 		},
-
-		exports: {}
+		exports: {
+			demultiplexedFastq: {
+				spec: demultiplexedFastqSpec,
+				data: demultiplexedFastqData
+			},
+			reports: {
+				spec: reportsSpec,
+				data: reportsData
+			},
+			qc: {
+				spec: qcSpec,
+				data: qcData
+			}
+		}
 	}
 })
-
