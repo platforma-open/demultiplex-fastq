@@ -38,7 +38,10 @@ self.awaitState("tupleToSampleByGroup", "ResourceReady")
 self.awaitState("tupleToSampleByGroup", { wildcard: "*" }, "ResourceReady")
 self.awaitState("params", "ResourceReady")
 
-mitoolSw := assets.importSoftware("@platforma-open/milaboratories.software-mitool:main")
+// See demux-group for the `memory-from-limits` rationale. export-fastq
+// concatenates N input mics and has its own end-of-stream finalization path,
+// so it gets the same JVM heap plumbing.
+mitoolSw := assets.importSoftware("@platforma-open/milaboratories.software-mitool:memory-from-limits")
 
 MIC_SUFFIX := ".result.mic"
 
@@ -122,7 +125,7 @@ self.body(func(inputs) {
 			env("MI_PROGRESS_PREFIX", progressPrefix).
 			software(mitoolSw).
 			cpu(4).
-			mem("16GiB").
+			mem("32GiB").
 			arg("export-fastq").
 			arg("--output-file").arg("R1.fastq.gz").arg("R1").saveFile("R1.fastq.gz")
 
