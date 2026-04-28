@@ -161,24 +161,27 @@ export const platforma = BlockModelV3.create(dataModel)
     };
   })
 
-  // Dropdown options + per-option spec snapshot. UI consumes both: `options`
-  // for `PlDropdownRef`, `factsByRef` to write the snapshot into `data` on
-  // dropdown change (same micro-task as `inputRef` itself).
+  // Dropdown options + per-option spec snapshot, computed atomically. Every
+  // option appearing in `options` is guaranteed present in `factsByRef` — the
+  // lambda filters out refs whose facts cannot be resolved, so UI can never
+  // commit a snapshot with missing facts.
   .output("inputOptions", (ctx): InputOptions => {
-    const options =
+    const rawOptions =
       ctx.resultPool.getOptions([
         {
           name: RULES_COLUMN_NAME,
           axes: [{ name: "pl7.app/sampleGroupId" }, { name: "pl7.app/sampleId" }],
         },
       ]) ?? [];
+    const options: { ref: PlRef; label: string }[] = [];
     const factsByRef: Record<string, InputFacts> = {};
-    for (const opt of options) {
+    for (const opt of rawOptions) {
       const spec = ctx.resultPool.getSpecByRef(opt.ref);
       if (!spec || !isPColumnSpec(spec)) continue;
       const tags = parseTagsAnnotation(spec.annotations?.[ANNOTATION_BARCODE_TAGS]);
       if (!tags) continue;
       const nucleotidesOnly = spec.annotations?.[ANNOTATION_NUCLEOTIDES_ONLY] === "true";
+      options.push(opt);
       factsByRef[refKey(opt.ref)] = { tags, nucleotidesOnly };
     }
     return { options, factsByRef };

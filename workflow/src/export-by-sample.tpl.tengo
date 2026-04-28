@@ -1,9 +1,10 @@
 // Cross-group export stage.
 //
-// Consumes three per-group outputs from demux-group:
+// Consumes per-group outputs from demux-group plus a single `params` value:
 //   - nestedMics:           ResourceMap[groupId] -> std/map { <tupleKey>.result.mic -> File }
 //   - tupleToSampleByGroup: ResourceMap[groupId] -> std/json { <tupleKey>: <sampleId> }
-//   - isPairedByGroup:      ResourceMap[groupId] -> std/json bool
+//   - params.isPaired:      bool — global paired-end status (read once in
+//                           demux-process from the FASTQ partition keys)
 //
 // Regroups the mics by sampleId across all groups and runs a SINGLE
 // `mitool export-fastq` per sampleId, passing every .mic file belonging to
@@ -35,8 +36,7 @@ self.awaitState("nestedMics", "ResourceReady")
 self.awaitState("nestedMics", { wildcard: "*" }, "ResourceReady")
 self.awaitState("tupleToSampleByGroup", "ResourceReady")
 self.awaitState("tupleToSampleByGroup", { wildcard: "*" }, "ResourceReady")
-self.awaitState("isPairedByGroup", "ResourceReady")
-self.awaitState("isPairedByGroup", { wildcard: "*" }, "ResourceReady")
+self.awaitState("params", "ResourceReady")
 
 mitoolSw := assets.importSoftware("@platforma-open/milaboratories.software-mitool:main")
 
@@ -45,11 +45,10 @@ MIC_SUFFIX := ".result.mic"
 self.body(func(inputs) {
 	nestedMics := inputs.nestedMics
 	tupleToSampleByGroup := inputs.tupleToSampleByGroup
-	isPairedByGroup := inputs.isPairedByGroup
+	isPaired := inputs.params.isPaired
 
 	ll.assert(smart.isResource(nestedMics), "nestedMics must be a resource")
 	ll.assert(smart.isResource(tupleToSampleByGroup), "tupleToSampleByGroup must be a resource")
-	ll.assert(smart.isResource(isPairedByGroup), "isPairedByGroup must be a resource")
 
 	// Per-group `tupleKey -> sampleId` lookup. Inner is std/json.
 	t2sByGroupKey := {}
@@ -60,27 +59,6 @@ self.body(func(inputs) {
 			ll.panic("group %s tupleToSample has error", groupKey)
 		}
 		t2sByGroupKey[groupKey] = fieldRef.getValue().getDataAsJson()
-	}
-
-	// isPaired uniform across groups by construction (input dataset has one
-	// readIndex axis), but assert. Empty map (no groups) → false.
-	isPaired := undefined
-	ipInputs := isPairedByGroup.inputs()
-	for groupKey in maps.getKeys(ipInputs) {
-		fieldRef := ipInputs[groupKey]
-		if fieldRef.isErrorSet() {
-			ll.panic("group %s isPaired has error", groupKey)
-		}
-		val := fieldRef.getValue().getDataAsJson()
-		if is_undefined(isPaired) {
-			isPaired = val
-		} else {
-			ll.assert(isPaired == val,
-				"sample groups disagree on isPaired — all groups must share the same paired-end status")
-		}
-	}
-	if is_undefined(isPaired) {
-		isPaired = false
 	}
 
 	// Regroup mics by sampleId.

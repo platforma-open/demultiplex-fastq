@@ -14,6 +14,8 @@ assets := import("@platforma-sdk/workflow-tengo:assets")
 pframes := import("@platforma-sdk/workflow-tengo:pframes")
 pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
 pSpec := import("@platforma-sdk/workflow-tengo:pframes.spec")
+maps := import("@platforma-sdk/workflow-tengo:maps")
+smart := import("@platforma-sdk/workflow-tengo:smart")
 ll := import("@platforma-sdk/workflow-tengo:ll")
 json := import("json")
 text := import("text")
@@ -78,6 +80,22 @@ self.body(func(inputs) {
 	sampleIdAxisSpec := rules.spec.axesSpec[1]
 	readIndexAxisSpec := fastq.spec.axesSpec[1]
 
+	// Determine paired-end status once globally — input is one FASTQ dataset
+	// with one readIndex axis, so the paired-end flag is uniform across
+	// groups. Inspect partition keys to detect any "R2" entry. Per-group
+	// computation would conflate "no rules in this group" with "single-end",
+	// causing spurious cross-group disagreement panics in export-by-sample.
+	isPaired := false
+	fastqInputs := fastq.data.inputs()
+	for sKey in maps.getKeys(fastqInputs) {
+		key := json.decode(sKey)
+		ll.assert(is_array(key) && len(key) == 2, "fastq partition key shape unexpected: %v", sKey)
+		if string(key[1]) == "R2" {
+			isPaired = true
+			break
+		}
+	}
+
 	// Defence-in-depth — args lambda already gates on these via the snapshot
 	// in `data`, but the workflow is the authoritative gate. If S&D re-emitted
 	// the column with a different tag set after the user picked it, this is
@@ -106,12 +124,26 @@ self.body(func(inputs) {
 	// usedTags is lex-sorted by the model — its position in the sorted list
 	// defines the S-tag index. Both the pattern and the per-row barcode tuples
 	// are projected into S-index order before reaching demux-group.
+	//
+	// Substitution is two-phase to avoid the cascade trap where a user tag name
+	// equals a future canonical name (e.g. usedTags=["A","S1"], canonicals=
+	// ["S1","S2"]; replacing {A}→{S1} first would then have iter 1 rewrite the
+	// freshly-introduced {S1} to {S2}). Phase 1 maps user tokens to opaque
+	// sentinels that cannot collide with canonical names; phase 2 maps
+	// sentinels to canonicals.
 	canonicalNames := []
 	canonicalPattern := tagPattern
 	for i, t in usedTags {
 		canonical := "S" + string(i + 1)
 		canonicalNames = append(canonicalNames, canonical)
-		canonicalPattern = text.replace(canonicalPattern, "{" + string(t) + "}", "{" + canonical + "}", -1)
+		// Sentinel: leading `_` makes it impossible to collide with `S<i>` and
+		// the `{[A-Za-z0-9]+}` placeholder grammar in user patterns.
+		sentinel := "{__demux_T" + string(i) + "__}"
+		canonicalPattern = text.replace(canonicalPattern, "{" + string(t) + "}", sentinel, -1)
+	}
+	for i := 0; i < len(usedTags); i++ {
+		sentinel := "{__demux_T" + string(i) + "__}"
+		canonicalPattern = text.replace(canonicalPattern, sentinel, "{" + canonicalNames[i] + "}", -1)
 	}
 
 	// Decode rules: { json([groupId, sampleId]) -> JSON-encoded Array<Record<TagName, Barcode>> }.
@@ -239,7 +271,10 @@ self.body(func(inputs) {
 			"pl7.app/label": "Report format"
 		}
 	}
-	reportsSpec := {
+	// Two versions: raw shape for processColumn's internal use (it applies
+	// traceSteps itself), injected for the export path so consumers see the
+	// proper lineage.
+	reportsSpecRaw := {
 		kind: "PColumn",
 		name: "milaboratories.demux/report",
 		domain: {
@@ -251,6 +286,7 @@ self.body(func(inputs) {
 		},
 		axesSpec: [sampleGroupIdAxisSpec, reportFormatAxisSpec]
 	}
+	reportsSpec := blockTrace.inject(reportsSpecRaw)
 
 	micsSpec := {
 		kind: "PColumn",
@@ -262,13 +298,6 @@ self.body(func(inputs) {
 	tupleToSampleSpec := {
 		kind: "PColumn",
 		name: "milaboratories.demux/tupleToSample",
-		domain: { "pl7.app/block": blockId },
-		valueType: "String",
-		axesSpec: [sampleGroupIdAxisSpec]
-	}
-	isPairedSpec := {
-		kind: "PColumn",
-		name: "milaboratories.demux/isPaired",
 		domain: { "pl7.app/block": blockId },
 		valueType: "String",
 		axesSpec: [sampleGroupIdAxisSpec]
@@ -300,7 +329,7 @@ self.body(func(inputs) {
 		name: "mitoolLog"
 	}, {
 		type: "Resource",
-		spec: reportsSpec,
+		spec: reportsSpecRaw,
 		name: "reports"
 	}, {
 		type: "Resource",
@@ -310,10 +339,6 @@ self.body(func(inputs) {
 		type: "Resource",
 		spec: tupleToSampleSpec,
 		name: "tupleToSample"
-	}, {
-		type: "Resource",
-		spec: isPairedSpec,
-		name: "isPaired"
 	}, {
 		type: "Resource",
 		spec: reportJsonContentSpec,
@@ -340,6 +365,7 @@ self.body(func(inputs) {
 				perGroupRows: perGroupRows,
 				canonicalNames: canonicalNames,
 				canonicalPattern: canonicalPattern,
+				isPaired: isPaired,
 				limitInput: limitInput
 			}
 		}
@@ -348,7 +374,9 @@ self.body(func(inputs) {
 	exportResult := render.createEphemeral(exportBySampleTpl, {
 		nestedMics: perGroupResult.outputData("mics"),
 		tupleToSampleByGroup: perGroupResult.outputData("tupleToSample"),
-		isPairedByGroup: perGroupResult.outputData("isPaired")
+		params: smart.createJsonResource({
+			isPaired: isPaired
+		})
 	})
 
 	reportsFlat := render.createEphemeral(flattenWithGroupTpl, {

@@ -57,9 +57,21 @@ function parsePlaceholders(pattern: string): { used: string[]; duplicate?: strin
   return { used: ordered };
 }
 
-// Live validation mirror of the args lambda's checks. Surfaced as an `error`
-// prop on the tag-pattern field so the user sees red before pressing Run.
-// args is the authoritative gate; this is UX.
+// Non-nucleotide barcodes are a property of the dataset, not the pattern —
+// flag on the input dropdown directly so the user sees the issue at the
+// source field. Args still throws for the same condition; UI is the
+// proactive UX layer.
+const inputRefError = computed<string | undefined>(() => {
+  if (!app.model.data.inputRef) return undefined;
+  if (!nucleotidesOnly.value) {
+    return "This dataset's barcodes are not nucleotides — FASTQ Demultiplexing requires [ACGTN]+ barcode values. Pick a different dataset or fix the rules in Samples & Data.";
+  }
+  return undefined;
+});
+
+// Live validation mirror of the args lambda's pattern checks. Surfaced as an
+// `error` prop on the tag-pattern field so the user sees red before pressing
+// Run. args is the authoritative gate; this is UX.
 const tagPatternError = computed<string | undefined>(() => {
   if (!app.model.data.inputRef) return undefined;
   const pattern = (app.model.data.tagPattern ?? "").replace(/\s+/g, "");
@@ -67,9 +79,6 @@ const tagPatternError = computed<string | undefined>(() => {
   const { used, duplicate } = parsePlaceholders(pattern);
   if (duplicate) return `Tag {${duplicate}} appears more than once.`;
   if (used.length === 0) return "Pattern must reference at least one barcode tag, e.g. {P5}.";
-  if (!nucleotidesOnly.value) {
-    return "Selected dataset's barcodes are not nucleotides — this block cannot demultiplex it.";
-  }
   const declared = new Set(declaredTags.value);
   const unknown = used.filter((t) => !declared.has(t));
   if (unknown.length > 0) {
@@ -104,6 +113,7 @@ function seedDefault() {
     :model-value="app.model.data.inputRef"
     :options="inputOptions"
     label="Multiplexed FASTQ dataset"
+    :error="inputRefError"
     @update:model-value="onInputRefUpdate"
   >
     <template #tooltip>

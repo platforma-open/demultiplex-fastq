@@ -7,12 +7,12 @@
 //   perGroupRows[groupId]: [{ sampleId, values: [v_S1, v_S2, ...], tupleKey }]
 //   canonicalNames:        ["S1", "S2", ...]   — S-index order
 //   canonicalPattern:      tagPattern with `{S<i>}` placeholders
+//   isPaired:              bool — global paired-end status (one FASTQ dataset)
 //   limitInput:            optional Int for --limit (preview mode)
 //
 // Outputs (aggregated across groups by processColumn):
 //   - mics:              fileSet `{<tupleKey>.result.mic -> File}`
 //   - tupleToSample:     JSON `{<tupleKey>: <sampleId>}` for this group
-//   - isPaired:          JSON bool — paired-end status of the input
 //   - mitoolLog:         merged stderr/stdout stream
 //   - reports:           ResourceMap[reportFormat] -> File for txt+json
 //   - reportJsonContent: JSON content of report.json — feeds qc.tpl.tengo
@@ -31,7 +31,7 @@ slices := import("@platforma-sdk/workflow-tengo:slices")
 json := import("json")
 text := import("text")
 
-self.defineOutputs("mics", "tupleToSample", "isPaired", "mitoolLog", "reports", "reportJsonContent")
+self.defineOutputs("mics", "tupleToSample", "mitoolLog", "reports", "reportJsonContent")
 
 mitoolSw := assets.importSoftware("@platforma-open/milaboratories.software-mitool:main")
 
@@ -39,6 +39,7 @@ self.body(func(inputs) {
 	perGroupRows := inputs.perGroupRows
 	canonicalNames := inputs.canonicalNames
 	canonicalPattern := inputs.canonicalPattern
+	isPaired := inputs.isPaired
 	limitInput := inputs.limitInput
 
 	currentKey := inputs[pConstants.KEY_FIELD_NAME]
@@ -51,7 +52,6 @@ self.body(func(inputs) {
 		return {
 			mics: smart.createNullResource(),
 			tupleToSample: {},
-			isPaired: false,
 			mitoolLog: smart.createNullResource(),
 			reports: pcolumn.resourceMapBuilder(1).build(),
 			reportJsonContent: smart.createNullResource()
@@ -80,16 +80,21 @@ self.body(func(inputs) {
 		if r == "R2" { R2File = inFile }
 	}
 	ll.assert(!is_undefined(R1File), "no R1 input file found")
-	isPaired := !is_undefined(R2File)
+	if isPaired {
+		ll.assert(!is_undefined(R2File),
+			"input dataset is paired-end but group %s has no R2 file", currentGroupId)
+	}
 
-	// Pattern construction.
-	// mitool grammar: `\` separates R1 and R2 sides and binds tighter than `|`,
-	// so `A | B\C` means "(A | B) on R1, C on R2". Substitute `{S<i>}`
-	// placeholders only on the R1 side, join branches with ` | `, re-attach R2.
+	// Pattern construction. mitool grammar:
+	//   `\` separates R1 and R2 sides (binds tightest)
+	//   `|` alternative within one side
+	//   `||` alternative across the whole read pair (binds loosest)
+	// Per-row branches contain row-specific captures on BOTH sides — substitute
+	// `{S<i>}` → `(S<i>:<value>)` on R1 AND R2 in lockstep, then join the
+	// per-row R1\R2 pairs with `||` so mitool sees full read-pair alternatives.
 	// canonicalPattern is whitespace-stripped already (model side).
 	backslash := "\\"
 	parts := text.split(canonicalPattern, backslash)
-	// Guard: pattern declares two reads (has a `\`) but input is single-end.
 	ll.assert(!(len(parts) > 1 && !isPaired),
 		"tag pattern declares an R2 side (contains '\\\\') but input FASTQ is single-end")
 	r1UserPart := parts[0]
@@ -101,19 +106,33 @@ self.body(func(inputs) {
 		r2UserPart = "^(R2:*)"
 	}
 
+	substituteRow := func(side, row) {
+		out := side
+		for i, name in canonicalNames {
+			capture := "(" + name + ":" + row.values[i] + ")"
+			out = text.replace(out, "{" + name + "}", capture, -1)
+		}
+		return out
+	}
+
 	variants := []
 	for r in rows {
-		branch := r1UserPart
-		for i, name in canonicalNames {
-			capture := "(" + name + ":" + r.values[i] + ")"
-			branch = text.replace(branch, "{" + name + "}", capture, -1)
+		r1Branch := substituteRow(r1UserPart, r)
+		if isPaired {
+			r2Branch := substituteRow(r2UserPart, r)
+			variants = append(variants, r1Branch + backslash + r2Branch)
+		} else {
+			variants = append(variants, r1Branch)
 		}
-		variants = append(variants, branch)
 	}
-	expandedPattern := text.join(variants, " | ")
-	if r2UserPart != "" {
-		expandedPattern = expandedPattern + backslash + r2UserPart
+	// Cross-pair alternative `||` for paired (each variant is a full R1\R2
+	// pair). Within-side alternative `|` for single-end (variants live on R1
+	// only).
+	separator := " | "
+	if isPaired {
+		separator = " || "
 	}
+	expandedPattern := text.join(variants, separator)
 
 	progressPrefix := "[==MITOOL_PROGRESS==]"
 
@@ -162,7 +181,6 @@ self.body(func(inputs) {
 	return {
 		mics: parse.getFileSet("mics"),
 		tupleToSample: tupleToSample,
-		isPaired: isPaired,
 		mitoolLog: parse.getStdoutStream(),
 		reports: reportsBuilder.build(),
 		reportJsonContent: parse.getFileContent("report.json")
