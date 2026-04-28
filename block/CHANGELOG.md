@@ -1,5 +1,12 @@
 # @platforma-open/milaboratories.demultiplex-fastq
 
+## 1.2.1
+
+### Patch Changes
+
+- Updated dependencies [45e7922]
+  - @platforma-open/milaboratories.demultiplex-fastq.workflow@1.2.1
+
 ## 1.2.0
 
 ### Minor Changes
