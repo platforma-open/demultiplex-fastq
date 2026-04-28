@@ -1,17 +1,16 @@
 // Cross-group export stage.
 //
-// Consumes the three per-group outputs that demux-group emits:
-//   - nestedMics:             ResourceMap[groupId] -> std/map { <bc>.result.mic -> File }
-//   - barcodeToSampleByGroup: ResourceMap[groupId] -> std/json { <bc>: <sampleId> }
-//   - isPairedByGroup:        ResourceMap[groupId] -> std/json bool
+// Consumes per-group outputs from demux-group plus a single `params` value:
+//   - nestedMics:           ResourceMap[groupId] -> std/map { <tupleKey>.result.mic -> File }
+//   - tupleToSampleByGroup: ResourceMap[groupId] -> std/json { <tupleKey>: <sampleId> }
+//   - params.isPaired:      bool — global paired-end status (read once in
+//                           demux-process from the FASTQ partition keys)
 //
 // Regroups the mics by sampleId across all groups and runs a SINGLE
 // `mitool export-fastq` per sampleId, passing every .mic file belonging to
-// that sample (from every group it appears in) as an input. mitool 2.3.1-55+
-// `export-fastq` accepts N .mic inputs and concatenates their reads in order —
-// see .meta/mitool-demux-block-changes-shipped.md. This replaces the old
-// per-group export path + flatten-with-collision-panic: cross-group same-
-// sampleId merging is the expected, natural case now.
+// that sample (from every group it appears in) as an input. mitool's
+// export-fastq accepts N .mic inputs and concatenates their reads in
+// argument order — cross-group same-sampleId merging is the natural case.
 //
 // Output: a single flat ResourceMap[sampleId, readIndex] -> File, which
 // demux-process passes straight through as the `demultiplexedFastq` PColumn
@@ -31,65 +30,38 @@ self.defineOutputs("demultiplexedFastqData")
 
 // Each outer is a PColumnData/ResourceMap[groupId] (from processColumn's
 // `type: "Resource"` wrapping). Wildcard await on every per-group inner is
-// required — the outer ResourceReady just means the outer map's input list
-// is locked, not that the per-group resources inside are ready.
+// required — outer ResourceReady just locks the input list, not the inner
+// resources.
 self.awaitState("nestedMics", "ResourceReady")
 self.awaitState("nestedMics", { wildcard: "*" }, "ResourceReady")
-self.awaitState("barcodeToSampleByGroup", "ResourceReady")
-self.awaitState("barcodeToSampleByGroup", { wildcard: "*" }, "ResourceReady")
-self.awaitState("isPairedByGroup", "ResourceReady")
-self.awaitState("isPairedByGroup", { wildcard: "*" }, "ResourceReady")
+self.awaitState("tupleToSampleByGroup", "ResourceReady")
+self.awaitState("tupleToSampleByGroup", { wildcard: "*" }, "ResourceReady")
+self.awaitState("params", "ResourceReady")
 
 mitoolSw := assets.importSoftware("@platforma-open/milaboratories.software-mitool:main")
 
 MIC_SUFFIX := ".result.mic"
 
 self.body(func(inputs) {
-	// PColumnData/ResourceMap does NOT match smart.isMapResource (only std/map
-	// does). _unmarshal returns the raw resource for us, so we iterate via
-	// .inputs() — the same pattern flatten.tpl.tengo used.
 	nestedMics := inputs.nestedMics
-	barcodeToSampleByGroup := inputs.barcodeToSampleByGroup
-	isPairedByGroup := inputs.isPairedByGroup
+	tupleToSampleByGroup := inputs.tupleToSampleByGroup
+	isPaired := inputs.params.isPaired
 
 	ll.assert(smart.isResource(nestedMics), "nestedMics must be a resource")
-	ll.assert(smart.isResource(barcodeToSampleByGroup), "barcodeToSampleByGroup must be a resource")
-	ll.assert(smart.isResource(isPairedByGroup), "isPairedByGroup must be a resource")
+	ll.assert(smart.isResource(tupleToSampleByGroup), "tupleToSampleByGroup must be a resource")
 
-	// Build per-group barcode→sampleId lookup. Inner is std/json — read via getDataAsJson.
-	b2sByGroupKey := {}
-	b2sInputs := barcodeToSampleByGroup.inputs()
-	for groupKey in maps.getKeys(b2sInputs) {
-		fieldRef := b2sInputs[groupKey]
+	// Per-group `tupleKey -> sampleId` lookup. Inner is std/json.
+	t2sByGroupKey := {}
+	t2sInputs := tupleToSampleByGroup.inputs()
+	for groupKey in maps.getKeys(t2sInputs) {
+		fieldRef := t2sInputs[groupKey]
 		if fieldRef.isErrorSet() {
-			ll.panic("group %s barcodeToSample has error", groupKey)
+			ll.panic("group %s tupleToSample has error", groupKey)
 		}
-		b2sByGroupKey[groupKey] = fieldRef.getValue().getDataAsJson()
+		t2sByGroupKey[groupKey] = fieldRef.getValue().getDataAsJson()
 	}
 
-	// isPaired is uniform across groups by construction (input dataset has one
-	// readIndex axis), but assert to be safe. Empty map (no groups) → false.
-	isPaired := undefined
-	ipInputs := isPairedByGroup.inputs()
-	for groupKey in maps.getKeys(ipInputs) {
-		fieldRef := ipInputs[groupKey]
-		if fieldRef.isErrorSet() {
-			ll.panic("group %s isPaired has error", groupKey)
-		}
-		val := fieldRef.getValue().getDataAsJson()
-		if is_undefined(isPaired) {
-			isPaired = val
-		} else {
-			ll.assert(isPaired == val,
-				"sample groups disagree on isPaired — all groups must share the same paired-end status")
-		}
-	}
-	if is_undefined(isPaired) {
-		isPaired = false
-	}
-
-	// Regroup mics by sampleId. Each entry carries groupKey + fileName + field
-	// reference (accepted directly by exec.builder().addFile()).
+	// Regroup mics by sampleId.
 	sampleToMics := {}
 	micsInputs := nestedMics.inputs()
 	for groupKey in maps.getKeys(micsInputs) {
@@ -105,8 +77,8 @@ self.body(func(inputs) {
 		if !smart.isMapResource(groupMics) {
 			continue
 		}
-		b2s := b2sByGroupKey[groupKey]
-		if is_undefined(b2s) {
+		t2s := t2sByGroupKey[groupKey]
+		if is_undefined(t2s) {
 			continue
 		}
 		fileFields := groupMics.inputs()
@@ -114,11 +86,11 @@ self.body(func(inputs) {
 			if !text.has_suffix(fileName, MIC_SUFFIX) {
 				continue
 			}
-			bc := text.substr(fileName, 0, len(fileName) - len(MIC_SUFFIX))
-			sampleId := b2s[bc]
+			tupleKey := text.substr(fileName, 0, len(fileName) - len(MIC_SUFFIX))
+			sampleId := t2s[tupleKey]
 			if is_undefined(sampleId) {
-				// Mitool captured a barcode outside the expected set — possible
-				// with a wildcard SMPL1 capture. Safe to drop.
+				// mitool captured a tuple outside the expected set — possible
+				// with wildcard captures. Drop quietly.
 				continue
 			}
 			if is_undefined(sampleToMics[sampleId]) {
@@ -135,7 +107,6 @@ self.body(func(inputs) {
 	progressPrefix := "[==MITOOL_PROGRESS==]"
 	fastqBuilder := pcolumn.resourceMapBuilder(2)
 
-	// One export-fastq per sample, consuming every .mic that carries its reads.
 	for sampleId in maps.getKeys(sampleToMics) {
 		micEntries := sampleToMics[sampleId]
 		// Deterministic input order — groupKey first, then fileName.
@@ -159,11 +130,10 @@ self.body(func(inputs) {
 			exportCmd = exportCmd.arg("--output-file").arg("R2.fastq.gz").arg("R2").saveFile("R2.fastq.gz")
 		}
 
-		// Fixed-schema local names — `g<i>.mic` after the deterministic
-		// sort above. Each exec is isolated per sampleId, so the input-name
-		// shape doesn't depend on barcode or groupKey values; only on the
-		// sorted index. This keeps the exec command shape a pure function of
-		// input count (good for debuggability and for content-hashed caching).
+		// Fixed-schema local names — `g<i>.mic` after deterministic sort. Each
+		// exec is isolated per sampleId, so the input-name shape doesn't depend
+		// on tuple or groupKey values; only on sorted index. Keeps the exec
+		// command shape a pure function of input count.
 		execArgs := []
 		for i, entry in micEntries {
 			localName := "g" + string(i) + ".mic"

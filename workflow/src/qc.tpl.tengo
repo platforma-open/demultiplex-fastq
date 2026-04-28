@@ -1,20 +1,17 @@
 // Per-sample QC aggregation.
 //
-// Consumes two per-group outputs produced by demux-group:
-//   - reportJsonByGroup:     ResourceMap[groupId] -> Value (file content of
-//                            `report.json`, saved via saveFileContent)
-//   - barcodeToSampleByGroup: ResourceMap[groupId] -> std/json { <bc>: <sampleId> }
+// Consumes two per-group outputs from demux-group:
+//   - reportJsonByGroup:    ResourceMap[groupId] -> Value (file content of
+//                           `report.json`, saved via saveFileContent)
+//   - tupleToSampleByGroup: ResourceMap[groupId] -> std/json { <tupleKey>: <sampleId> }
 //
-// For each group, decodes `parseReport.perSampleMatched` from the JSON report
-// (mitool 2.3.1-57+ — see .meta/shipped/mitool-parse-per-sample-counts.md),
-// maps every `sampleKey[0]` (barcode) back to the block's sampleId via that
-// group's barcodeToSample, and accumulates into a single flat map
-// `[groupId, sampleId] -> matched`.
+// For each group, decodes `parseReport.perSampleMatched` from the JSON report,
+// joins each entry's `sampleKey` array with `_` to get the tuple key, looks up
+// the matching sampleId via that group's tupleToSample, and accumulates into
+// a single flat map `[groupId, sampleId] -> matched`.
 //
-// Emits PColumnData/Json with keyLength 2 — the axes are
-// [sampleGroupId, sampleId] per qcSpec in demux-process.
-//
-// Empty groups (no samples / createNullResource from demux-group) are skipped.
+// Emits PColumnData/Json with keyLength 2 — axes are [sampleGroupId, sampleId]
+// per qcSpec in demux-process.
 
 self := import("@platforma-sdk/workflow-tengo:tpl")
 ll := import("@platforma-sdk/workflow-tengo:ll")
@@ -22,43 +19,37 @@ smart := import("@platforma-sdk/workflow-tengo:smart")
 maps := import("@platforma-sdk/workflow-tengo:maps")
 pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
 json := import("json")
+text := import("text")
 
 self.defineOutputs("qcData", "qcGroupSummary")
 
-// Outer maps ready + each inner value ready. Mirrors export-by-sample.
 self.awaitState("reportJsonByGroup", "ResourceReady")
 self.awaitState("reportJsonByGroup", { wildcard: "*" }, "ResourceReady")
-self.awaitState("barcodeToSampleByGroup", "ResourceReady")
-self.awaitState("barcodeToSampleByGroup", { wildcard: "*" }, "ResourceReady")
+self.awaitState("tupleToSampleByGroup", "ResourceReady")
+self.awaitState("tupleToSampleByGroup", { wildcard: "*" }, "ResourceReady")
 
 self.body(func(inputs) {
 	reportJsonByGroup := inputs.reportJsonByGroup
-	barcodeToSampleByGroup := inputs.barcodeToSampleByGroup
+	tupleToSampleByGroup := inputs.tupleToSampleByGroup
 
 	ll.assert(smart.isResource(reportJsonByGroup), "reportJsonByGroup must be a resource")
-	ll.assert(smart.isResource(barcodeToSampleByGroup), "barcodeToSampleByGroup must be a resource")
+	ll.assert(smart.isResource(tupleToSampleByGroup), "tupleToSampleByGroup must be a resource")
 
-	// Per-group barcode→sampleId lookup. getValue returns the std/json resource;
-	// getDataAsJson decodes to a Tengo map.
-	b2sByGroupKey := {}
-	b2sInputs := barcodeToSampleByGroup.inputs()
-	for groupKey in maps.getKeys(b2sInputs) {
-		fieldRef := b2sInputs[groupKey]
+	t2sByGroupKey := {}
+	t2sInputs := tupleToSampleByGroup.inputs()
+	for groupKey in maps.getKeys(t2sInputs) {
+		fieldRef := t2sInputs[groupKey]
 		if fieldRef.isErrorSet() {
-			ll.panic("group %s barcodeToSample has error", groupKey)
+			ll.panic("group %s tupleToSample has error", groupKey)
 		}
-		b2sByGroupKey[groupKey] = fieldRef.getValue().getDataAsJson()
+		t2sByGroupKey[groupKey] = fieldRef.getValue().getDataAsJson()
 	}
 
-	// Walk per-group JSON reports, extract perSampleMatched + group totals.
-	// flat           → per-sample matched (feeds the QC Report table).
-	// groupSummary   → per-group {total, matched} (feeds the main-table bar col).
+	// flat         → per-sample matched (drives the QC Report table).
+	// groupSummary → per-group {total, matched} (drives the main-table bar col).
 	//
 	// ResourceMap input field names are JSON-encoded axis-value arrays —
-	// e.g. `["Unlabelled"]` — so we decode each to the bare sampleGroupId
-	// before using it as a user-visible key. The UI looks up
-	// qcGroupSummary[sampleGroupId] with the bare axis value, and QcPage
-	// expects the flat map to be keyed `json.encode([sampleGroupId, sampleId])`.
+	// e.g. `["g1"]` — decode each to bare sampleGroupId before using as key.
 	flat := {}
 	groupSummary := {}
 	reportInputs := reportJsonByGroup.inputs()
@@ -75,24 +66,15 @@ self.body(func(inputs) {
 		if !smart.isResource(contentRes) {
 			continue
 		}
-		// Empty-group sentinel — demux-group returns createNullResource there.
-		// A null resource has no decodable JSON; skip.
 		if smart.isNullResource(contentRes) {
 			continue
 		}
 
-		// Decode the captured report.json.
-		// Shape (mitool 2.3.1-57+):
-		//   { parseReport: { total, matched, perSampleMatched: [{sampleKey:[bc], matched:N}, ...], ... }, ... }
 		report := contentRes.getDataAsJson()
 		ll.assert(is_map(report), "group %s report.json did not decode to a map", groupKey)
 		parseReport := report.parseReport
 		ll.assert(is_map(parseReport), "group %s report.json missing parseReport object", groupKey)
 
-		// Per-group totals: used by the main-table bar renderer. Always recorded,
-		// even when perSampleMatched is absent (older mitool / no Sample tag).
-		// Asserting shape explicitly so a silent rename in mitool's report surfaces
-		// here rather than as an empty bar cell in the UI.
 		ll.assert(is_int(parseReport.total),
 			"group %s report.json parseReport.total is not an int: %v", sampleGroupId, parseReport.total)
 		ll.assert(is_int(parseReport.matched),
@@ -104,16 +86,13 @@ self.body(func(inputs) {
 
 		perSample := parseReport.perSampleMatched
 		if is_undefined(perSample) {
-			// mitool < 2.3.1-57 or pattern with no Sample-type tags — no per-sample
-			// data to emit, but group summary above is still valid.
+			// No Sample-type tags in pattern — group summary above is still valid.
 			continue
 		}
 		ll.assert(is_array(perSample), "group %s perSampleMatched is not an array", groupKey)
 
-		b2s := b2sByGroupKey[groupKey]
-		if is_undefined(b2s) {
-			// A JSON report landed for a group we never recorded barcodes for —
-			// shouldn't happen, but skip quietly rather than mis-attribute counts.
+		t2s := t2sByGroupKey[groupKey]
+		if is_undefined(t2s) {
 			continue
 		}
 
@@ -122,11 +101,15 @@ self.body(func(inputs) {
 				"group %s perSampleMatched entry malformed: %v", groupKey, entry)
 			ll.assert(len(entry.sampleKey) >= 1,
 				"group %s perSampleMatched entry has empty sampleKey", groupKey)
-			barcode := string(entry.sampleKey[0])
-			sampleId := b2s[barcode]
+			tupleParts := []
+			for v in entry.sampleKey {
+				tupleParts = append(tupleParts, string(v))
+			}
+			tupleKey := text.join(tupleParts, "_")
+			sampleId := t2s[tupleKey]
 			if is_undefined(sampleId) {
-				// Captured barcode not in our expected set (e.g. wildcard SMPL1
-				// capture). Match export-by-sample's behavior — drop silently.
+				// Captured tuple not in our expected set (e.g. wildcard capture).
+				// Drop silently — matches export-by-sample's behaviour.
 				continue
 			}
 			flat[json.encode([sampleGroupId, sampleId])] = entry.matched
@@ -139,9 +122,6 @@ self.body(func(inputs) {
 	}
 	return {
 		qcData: smart.createValueResource(pConstants.RTYPE_P_COLUMN_DATA_JSON, json.encode(payload)),
-		// Plain JSON resource — consumed by the model as a raw map keyed by
-		// sampleGroupId. No PColumn wrapping: this feeds a bar cell, not a
-		// downstream block.
 		qcGroupSummary: smart.createJsonResource(groupSummary)
 	}
 })
