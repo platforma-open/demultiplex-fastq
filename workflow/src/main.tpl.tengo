@@ -8,15 +8,16 @@ smart := import("@platforma-sdk/workflow-tengo:smart")
 demuxProcessTpl := assets.importTemplate(":demux-process")
 
 wf.body(func(args) {
-	ll.assert(!is_undefined(args.inputRef), "sample groups linker is required")
-	ll.assert(!is_undefined(args.barcodeSourceRef), "barcode source column is required")
+	ll.assert(!is_undefined(args.inputRef), "multiplexing rules column is required")
 	ll.assert(!is_undefined(args.tagPattern) && args.tagPattern != "", "tag pattern is required")
+	ll.assert(!is_undefined(args.usedTags) && len(args.usedTags) > 0, "usedTags is required")
 
 	blockId := wf.blockId().getDataAsJson()
 
-	// Single anchor: the linker. The multiplexed FASTQ dataset is resolved as a
-	// query against it (same block + dataset domain, matching axis 0). The barcode
-	// source is already a user-picked ref — resolved separately below.
+	// Single anchor: the multiplexing rules column. The matching FASTQ dataset
+	// is resolved as a query with the same block + dataset domain on the
+	// sampleGroupId axis. The rules column carries per-cell barcodes inline —
+	// no separate barcode-source ref.
 	bundleBuilder := wf.createPBundleBuilder()
 	bundleBuilder.addAnchor("main", args.inputRef)
 	bundleBuilder.addMulti({
@@ -32,15 +33,12 @@ wf.body(func(args) {
 	}, "fastq")
 	bundle := bundleBuilder.build()
 
-	// Barcode source is a user-picked PlRef — a plain column resolve, no bundle.
-	barcodeSource := wf.resolve(args.barcodeSourceRef)
-
 	demuxResult := render.createEphemeral(demuxProcessTpl, {
 		bundle: bundle,
-		barcodeData: barcodeSource.data,
 		params: smart.createJsonResource({
 			blockId: blockId,
 			tagPattern: args.tagPattern,
+			usedTags: args.usedTags,
 			limitInput: args.limitInput
 		})
 	})
@@ -57,18 +55,9 @@ wf.body(func(args) {
 	return {
 		outputs: {
 			demultiplexedFastq: pframes.exportColumnData(demultiplexedFastqData),
-			// ResourceMap[sampleGroupId] -> Stream — model reads via getLogHandle /
-			// getProgressLog("[==MITOOL_PROGRESS==]"). No exportColumnData wrapper
-			// (same as miltenyi mitoolLogs pattern): streams need no export step.
 			mitoolLogs: mitoolLogsData,
-			// ResourceMap[sampleGroupId, reportFormat] -> File — model reads via
-			// getFileHandle for download.
 			reports: pframes.exportColumnData(reportsData),
-			// PColumnData/Json keyed [sampleGroupId, sampleId] → matchedReads.
-			// Model reads via getDataAsJson to power the QC table.
 			qc: qcData,
-			// Plain JSON resource: { [groupId]: { total, matched } } — drives the
-			// matched/total bar cell in MainPage's per-group table.
 			qcGroupSummary: qcGroupSummary
 		},
 		exports: {

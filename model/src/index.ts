@@ -2,100 +2,186 @@ import type { InferOutputsType, PlRef } from "@platforma-sdk/model";
 import {
   BlockModelV3,
   DataModelBuilder,
-  getAxisId,
   isPColumnSpec,
   parseResourceMap,
 } from "@platforma-sdk/model";
 
 const MITOOL_PROGRESS_PREFIX = "[==MITOOL_PROGRESS==]";
 
+const RULES_COLUMN_NAME = "pl7.app/sequencing/multiplexingRules";
+const ANNOTATION_BARCODE_TAGS = "pl7.app/sequencing/barcodeTags";
+const ANNOTATION_NUCLEOTIDES_ONLY = "pl7.app/sequencing/barcodeNucleotidesOnly";
+
+// Snapshot of the spec annotations the args lambda needs to validate against.
+// Args lambda is pure-of-data — it cannot read result pool — so the UI mirrors
+// these into `data` on the input-ref change handler. See harness reflection
+// `args-lambda-data-only.md`.
+export type InputFacts = {
+  tags: string[];
+  nucleotidesOnly: boolean;
+};
+
 export type BlockData = {
+  inputRef?: PlRef;
+  // Snapshot from the multiplexing rules column's annotations, written by the
+  // UI in the same micro-task as `inputRef`. Args lambda validates against this
+  // copy. Stale only if the upstream column re-emits with a different tag set
+  // before the user re-touches the dropdown — workflow asserts as a
+  // defence-in-depth gate.
+  inputBarcodeTags: string[];
+  inputNucleotidesOnly: boolean;
+  tagPattern: string;
+  limitInput: number;
+  runMode: "dry" | "full";
+};
+
+type BlockDataV1 = {
   inputRef?: PlRef;
   barcodeSourceRef?: PlRef;
   tagPattern: string;
-  // Always a number. Only consumed when runMode === "dry"; kept non-optional
-  // so the Preview-mode field never has to handle a missing value.
   limitInput: number;
   runMode: "dry" | "full";
 };
 
 export type BlockArgs = {
-  inputRef?: PlRef;
-  barcodeSourceRef?: PlRef;
+  inputRef: PlRef;
   tagPattern: string;
+  // Lex-sorted unique placeholders extracted from `tagPattern`. Workflow uses
+  // these to canonicalise to S1/S2/... before invoking mitool.
+  usedTags: string[];
   limitInput?: number;
 };
 
-const DEFAULT_TAG_PATTERN = "^{SMPL1}N{0:2}(R1:*)\\^N{20}(R2:*)";
+export type InputOptions = {
+  options: { ref: PlRef; label: string }[];
+  // Keyed by `${ref.blockId}/${ref.name}` — PlRef itself is a structure and
+  // not directly usable as a Map/Record key. The UI uses this to snapshot
+  // `tags` + `nucleotidesOnly` into `data` on dropdown change.
+  factsByRef: Record<string, InputFacts>;
+};
+
 const DRY_RUN_READS_DEFAULT = 100_000;
 
-const dataModel = new DataModelBuilder().from<BlockData>("v1").init(() => ({
-  tagPattern: DEFAULT_TAG_PATTERN,
-  limitInput: DRY_RUN_READS_DEFAULT,
-  runMode: "full",
-}));
+// `${ref.blockId}/${ref.name}` is unique inside one project — PlRef has only
+// these two semantic fields beyond the `__isRef` tag.
+export const refKey = (ref: PlRef): string => `${ref.blockId}/${ref.name}`;
+
+const PLACEHOLDER_RE = /\{([A-Za-z0-9]+)\}/g;
+
+function parsePlaceholders(pattern: string): { used: string[]; duplicate?: string } {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  let m: RegExpExecArray | null;
+  PLACEHOLDER_RE.lastIndex = 0;
+  while ((m = PLACEHOLDER_RE.exec(pattern)) !== null) {
+    const name = m[1];
+    if (seen.has(name)) return { used: ordered, duplicate: name };
+    seen.add(name);
+    ordered.push(name);
+  }
+  return { used: ordered };
+}
+
+function parseTagsAnnotation(raw: string | undefined): string[] | undefined {
+  if (raw === undefined) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(parsed)) return undefined;
+  if (!parsed.every((x) => typeof x === "string")) return undefined;
+  return parsed;
+}
+
+const dataModel = new DataModelBuilder()
+  .from<BlockDataV1>("v1")
+  .migrate<BlockData>("v2", (v1) => ({
+    inputRef: undefined,
+    inputBarcodeTags: [],
+    inputNucleotidesOnly: false,
+    // Old patterns referenced {SMPL1}; the new validation requires placeholders
+    // to live in the rules column's `barcodeTags` set, so wipe and let the user
+    // re-author from the new declared tags.
+    tagPattern: "",
+    limitInput: v1.limitInput,
+    runMode: v1.runMode,
+  }))
+  .init(
+    (): BlockData => ({
+      inputBarcodeTags: [],
+      inputNucleotidesOnly: false,
+      tagPattern: "",
+      limitInput: DRY_RUN_READS_DEFAULT,
+      runMode: "full",
+    }),
+  );
 
 export const platforma = BlockModelV3.create(dataModel)
 
   .args<BlockArgs>((data) => {
-    if (!data.inputRef) throw new Error("Sample groups linker is required");
-    if (!data.barcodeSourceRef) throw new Error("Barcode source metadata column is required");
+    if (!data.inputRef) throw new Error("Multiplexing rules column is required");
     if (!data.tagPattern || !data.tagPattern.trim()) throw new Error("Tag pattern is required");
     if (data.runMode === "dry" && data.limitInput <= 0) {
       throw new Error("Read limit must be a positive integer for Preview mode");
     }
-    // Mitool's tokenizer calls nextChar(skipSpaces=true) in the top-level parse
-    // loop (tools/mitool/.../Tokenizer.kt), so whitespace between tokens is
-    // silently ignored — and spaces are *disallowed* inside tag names. Stripping
-    // all whitespace upfront gives us a canonical pattern that's equivalent for
-    // mitool and trivially splittable on `\` downstream.
+    // Mitool's tokenizer skips spaces between tokens (Tokenizer.kt) and
+    // disallows them inside tag names — strip everything upfront for a
+    // canonical pattern.
     const tagPattern = data.tagPattern.replace(/\s+/g, "");
+
+    const { used, duplicate } = parsePlaceholders(tagPattern);
+    if (duplicate) {
+      throw new Error(`Tag placeholder {${duplicate}} appears more than once in the pattern`);
+    }
+    if (used.length === 0) {
+      throw new Error("Tag pattern must reference at least one barcode tag, e.g. {P5}");
+    }
+    const declared = new Set(data.inputBarcodeTags);
+    const unknown = used.filter((t) => !declared.has(t));
+    if (unknown.length > 0) {
+      throw new Error(
+        `Unknown tag placeholder(s): ${unknown.map((t) => `{${t}}`).join(", ")}. ` +
+          `Declared tags on this dataset: ${data.inputBarcodeTags.join(", ") || "(none)"}.`,
+      );
+    }
+    if (!data.inputNucleotidesOnly) {
+      throw new Error(
+        "Selected dataset's barcodes are not nucleotides — FASTQ Demultiplexing requires " +
+          "nucleotide barcodes. Use a dataset where every barcode value is [ACGTN]+.",
+      );
+    }
+
     return {
       inputRef: data.inputRef,
-      barcodeSourceRef: data.barcodeSourceRef,
       tagPattern,
-      // `limitInput` only flows to the workflow in Preview mode — Full run
-      // strips it so a stale value from an earlier Preview doesn't leak.
+      usedTags: [...used].sort(),
       limitInput: data.runMode === "dry" ? data.limitInput : undefined,
     };
   })
 
-  // The block's single anchor is the sample-groups linker column.
-  // Axes: [sampleGroupId, sampleId]. Both the multiplexed FASTQ dataset and the
-  // sample barcode metadata are discovered from this one ref — FASTQ via axis[0],
-  // metadata via axis[1].
-  .output("inputOptions", (ctx) =>
-    ctx.resultPool.getOptions([
-      {
-        name: "pl7.app/sequencing/data/sampleGroups",
-        axes: [{ name: "pl7.app/sampleGroupId" }, { name: "pl7.app/sampleId" }],
-      },
-    ]),
-  )
-
-  // Barcode source scoped by axis identity: metadata columns whose sampleId axis
-  // equals the linker's axes[1]. getAxisId strips the axis spec down to
-  // {name, type, domain, contextDomain} — whatever samples-and-data stamps on
-  // the sampleId axis flows through, no specific domain keys referenced.
-  .output("barcodeSource", (ctx) => {
-    const inputRef = ctx.data.inputRef;
-    if (!inputRef) return { options: [], suggested: undefined as PlRef | undefined };
-    const linkerSpec = ctx.resultPool.getSpecByRef(inputRef);
-    if (!linkerSpec || !isPColumnSpec(linkerSpec)) {
-      return { options: [], suggested: undefined as PlRef | undefined };
-    }
+  // Dropdown options + per-option spec snapshot. UI consumes both: `options`
+  // for `PlDropdownRef`, `factsByRef` to write the snapshot into `data` on
+  // dropdown change (same micro-task as `inputRef` itself).
+  .output("inputOptions", (ctx): InputOptions => {
     const options =
       ctx.resultPool.getOptions([
         {
-          name: "pl7.app/metadata",
-          type: "String",
-          axes: [getAxisId(linkerSpec.axesSpec[1])],
+          name: RULES_COLUMN_NAME,
+          axes: [{ name: "pl7.app/sampleGroupId" }, { name: "pl7.app/sampleId" }],
         },
       ]) ?? [];
-
-    const labelHits = options.filter((o) => /barcode/i.test(o.label ?? ""));
-    const suggested: PlRef | undefined = labelHits.length === 1 ? labelHits[0].ref : undefined;
-    return { options, suggested };
+    const factsByRef: Record<string, InputFacts> = {};
+    for (const opt of options) {
+      const spec = ctx.resultPool.getSpecByRef(opt.ref);
+      if (!spec || !isPColumnSpec(spec)) continue;
+      const tags = parseTagsAnnotation(spec.annotations?.[ANNOTATION_BARCODE_TAGS]);
+      if (!tags) continue;
+      const nucleotidesOnly = spec.annotations?.[ANNOTATION_NUCLEOTIDES_ONLY] === "true";
+      factsByRef[refKey(opt.ref)] = { tags, nucleotidesOnly };
+    }
+    return { options, factsByRef };
   })
 
   .output("demultiplexedFastq", (ctx) =>
@@ -104,8 +190,6 @@ export const platforma = BlockModelV3.create(dataModel)
       ?.getPColumns(),
   )
 
-  // Per-sampleGroup mitool parse log handles — MainPage wires these into a log
-  // viewer keyed on sampleGroupId.
   .output("mitoolLogs", (ctx) => {
     if (!ctx.outputs) return undefined;
     const acc = ctx.outputs.resolve({ field: "mitoolLogs", allowPermanentAbsence: true });
@@ -113,9 +197,6 @@ export const platforma = BlockModelV3.create(dataModel)
     return parseResourceMap(acc, (a) => a.getLogHandle(), false);
   })
 
-  // Live per-sampleGroup progress scraped from the merged stderr/stdout stream.
-  // Prefix is set via MI_PROGRESS_PREFIX env var in demux-group.tpl.tengo — mitool
-  // emits one line per tick with that prefix.
   .output("mitoolProgress", (ctx) => {
     if (!ctx.outputs) return undefined;
     const acc = ctx.outputs.resolve({ field: "mitoolLogs", allowPermanentAbsence: true });
@@ -123,8 +204,6 @@ export const platforma = BlockModelV3.create(dataModel)
     return parseResourceMap(acc, (a) => a.getProgressLog(MITOOL_PROGRESS_PREFIX), true);
   })
 
-  // Per-sampleGroup parse report files — `reportFormat ∈ {txt, json}`. Users
-  // download them via the UI; QC data is consumed via the separate `qc` output.
   .output("reports", (ctx) => {
     if (!ctx.outputs) return undefined;
     const acc = ctx.outputs.resolve({ field: "reports", allowPermanentAbsence: true });
@@ -132,10 +211,6 @@ export const platforma = BlockModelV3.create(dataModel)
     return parseResourceMap(acc, (a) => a.getFileHandle(), false);
   })
 
-  // QC table — per-sample matched-reads derived from parseReport.perSampleMatched
-  // in each group's JSON report (mitool 2.3.1-57+). Decoded into flat rows
-  // { sampleGroupId, sampleId, matched } so QcPage can render without reparsing
-  // the PColumn JSON shape.
   .output("qc", (ctx) => {
     const raw = ctx.outputs
       ?.resolve({ field: "qc", allowPermanentAbsence: true })
@@ -155,18 +230,12 @@ export const platforma = BlockModelV3.create(dataModel)
     return rows;
   })
 
-  // Per-group { total, matched } — drives the matched-reads bar column in
-  // MainPage. Raw map, keyed by sampleGroupId. Total comes from mitool's
-  // parseReport.total (every read seen), matched from parseReport.matched
-  // (reads routed to a sample writer).
   .output("qcGroupSummary", (ctx) =>
     ctx.outputs
       ?.resolve({ field: "qcGroupSummary", allowPermanentAbsence: true })
       ?.getDataAsJson<Record<string, { total: number; matched: number }>>(),
   )
 
-  // Human-readable sampleGroupId and sampleId labels (if samples-and-data
-  // published a label column on those axes). MainPage/QcPage render these.
   .output("sampleGroupLabels", (ctx) => {
     const inputRef = ctx.data.inputRef;
     if (!inputRef) return undefined;

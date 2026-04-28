@@ -1,29 +1,24 @@
 // Per-group demultiplexing template.
-// Invoked by pframes.processColumn in demux-process.tpl.tengo, once per sampleGroupId.
+// Invoked by pframes.processColumn in demux-process.tpl.tengo, once per
+// sampleGroupId. All inputs arrive in mitool's canonical form — this template
+// never sees user tag names.
 //
-// Runs `mitool parse` per group and emits five outputs that processColumn
-// aggregates across groups:
-//   - mics:            fileSet `{<barcode>.result.mic -> File}` — produced lazily
-//                      by mitool's MultiSampleRun (barcodes with zero matches
-//                      produce no file); collected via saveFileSet regex
-//   - barcodeToSample: JSON `{<bc>: <sampleId>}` for this group
-//   - isPaired:        JSON bool — paired-end status of the input
-//   - mitoolLog:       merged stderr/stdout stream for live progress + log viewer
-//   - reports:         ResourceMap[reportFormat] -> File for txt+json parse reports
+// Inputs from `extra`:
+//   perGroupRows[groupId]: [{ sampleId, values: [v_S1, v_S2, ...], tupleKey }]
+//   canonicalNames:        ["S1", "S2", ...]   — S-index order
+//   canonicalPattern:      tagPattern with `{S<i>}` placeholders
+//   limitInput:            optional Int for --limit (preview mode)
 //
-// The cross-group export-fastq stage (export-by-sample.tpl.tengo) consumes the
-// first three, running ONE mitool export-fastq per sampleId with every .mic
-// file belonging to that sample across all groups.
+// Outputs (aggregated across groups by processColumn):
+//   - mics:              fileSet `{<tupleKey>.result.mic -> File}`
+//   - tupleToSample:     JSON `{<tupleKey>: <sampleId>}` for this group
+//   - isPaired:          JSON bool — paired-end status of the input
+//   - mitoolLog:         merged stderr/stdout stream
+//   - reports:           ResourceMap[reportFormat] -> File for txt+json
+//   - reportJsonContent: JSON content of report.json — feeds qc.tpl.tengo
 //
-// Note: no //tengo:hash_override here. We rely on normal content-hashing so edits
-// invalidate the step result naturally. The hash_override + stepCache combo we
-// had earlier caused stale-cache traps where edits silently kept the broken
-// cached output.
-//
-// Inputs are pre-built in demux-process:
-//   perGroupData: { groupId -> [[barcode, sampleId], ...] }
-//   tagPattern:   user tag pattern with the {SMPL1} placeholder, whitespace-stripped
-//   limitInput:   optional Int for --limit (preview mode)
+// No //tengo:hash_override here — content-hashing handles cache invalidation
+// naturally; hash_override + stepCache previously caused stale-cache traps.
 
 self := import("@platforma-sdk/workflow-tengo:tpl.light")
 ll := import("@platforma-sdk/workflow-tengo:ll")
@@ -36,29 +31,26 @@ slices := import("@platforma-sdk/workflow-tengo:slices")
 json := import("json")
 text := import("text")
 
-self.defineOutputs("mics", "barcodeToSample", "isPaired", "mitoolLog", "reports", "reportJsonContent")
+self.defineOutputs("mics", "tupleToSample", "isPaired", "mitoolLog", "reports", "reportJsonContent")
 
 mitoolSw := assets.importSoftware("@platforma-open/milaboratories.software-mitool:main")
 
-TAG_NAME := "SMPL1"
-
 self.body(func(inputs) {
-	// perGroupData arrives as a plain Tengo map (passed via processColumn.extra
-	// as a raw map, not wrapped in a JSON resource).
-	perGroupData := inputs.perGroupData
-	tagPattern := inputs.tagPattern
+	perGroupRows := inputs.perGroupRows
+	canonicalNames := inputs.canonicalNames
+	canonicalPattern := inputs.canonicalPattern
 	limitInput := inputs.limitInput
 
 	currentKey := inputs[pConstants.KEY_FIELD_NAME]
 	ll.assert(is_array(currentKey) && len(currentKey) > 0, "expected key to contain groupId")
 	currentGroupId := string(currentKey[0])
 
-	entries := perGroupData[currentGroupId]
-	if is_undefined(entries) || len(entries) == 0 {
-		// Empty group: no parse run. Downstream iteration skips null inners.
+	rows := perGroupRows[currentGroupId]
+	if is_undefined(rows) || len(rows) == 0 {
+		// Empty group — no parse run. Downstream iteration skips null inners.
 		return {
 			mics: smart.createNullResource(),
-			barcodeToSample: {},
+			tupleToSample: {},
 			isPaired: false,
 			mitoolLog: smart.createNullResource(),
 			reports: pcolumn.resourceMapBuilder(1).build(),
@@ -66,25 +58,16 @@ self.body(func(inputs) {
 		}
 	}
 
-	// Deterministic barcode order: lex-sort the [barcode, sampleId] pairs by barcode.
-	entries = slices.quickSortFn(entries, func(a, b) {
-		return a[0] < b[0]
+	// Deterministic branch order for cache-key stability — sort rows by tupleKey.
+	rows = slices.quickSortFn(rows, func(a, b) {
+		return a.tupleKey < b.tupleKey
 	})
 
-	barcodes := []
-	barcodeToSample := {}
-	for e in entries {
-		bc := e[0]
-		sampleId := e[1]
-		if !is_undefined(barcodeToSample[bc]) {
-			ll.panic("Barcode %s used by multiple samples in group %s: %s and %s",
-				bc, currentGroupId, barcodeToSample[bc], sampleId)
-		}
-		barcodeToSample[bc] = sampleId
-		barcodes = append(barcodes, bc)
+	tupleToSample := {}
+	for r in rows {
+		tupleToSample[r.tupleKey] = r.sampleId
 	}
 
-	// Collect R1/R2 files from aggregated input
 	currentElement := inputs[pConstants.VALUE_FIELD_NAME]
 	ll.assert(!is_undefined(currentElement) && smart.isResource(currentElement), "invalid input element")
 
@@ -99,18 +82,14 @@ self.body(func(inputs) {
 	ll.assert(!is_undefined(R1File), "no R1 input file found")
 	isPaired := !is_undefined(R2File)
 
-	// Pattern construction:
-	//   mitool grammar: `\` separates R1 and R2 sides and binds tighter than `|`,
-	//   so `A | B\C` means "(A | B) on R1, C on R2". We must therefore expand
-	//   {SMPL1} only on the R1 side (left of `\`), join variants with ` | `, and
-	//   re-attach the R2 side once at the end. If the user's pattern doesn't
-	//   include a `\` and the input is paired-end, auto-extend with `^(R2:*)`
-	//   so the R2 reads are matched trivially.
-	// tagPattern is already whitespace-normalised by the model's args lambda.
+	// Pattern construction.
+	// mitool grammar: `\` separates R1 and R2 sides and binds tighter than `|`,
+	// so `A | B\C` means "(A | B) on R1, C on R2". Substitute `{S<i>}`
+	// placeholders only on the R1 side, join branches with ` | `, re-attach R2.
+	// canonicalPattern is whitespace-stripped already (model side).
 	backslash := "\\"
-	parts := text.split(tagPattern, backslash)
-	// Guard: the user's pattern declares two reads (has a `\`) but input is
-	// single-end. mitool would error cryptically — fail loudly with intent.
+	parts := text.split(canonicalPattern, backslash)
+	// Guard: pattern declares two reads (has a `\`) but input is single-end.
 	ll.assert(!(len(parts) > 1 && !isPaired),
 		"tag pattern declares an R2 side (contains '\\\\') but input FASTQ is single-end")
 	r1UserPart := parts[0]
@@ -122,11 +101,14 @@ self.body(func(inputs) {
 		r2UserPart = "^(R2:*)"
 	}
 
-	placeholder := "{" + TAG_NAME + "}"
 	variants := []
-	for bc in barcodes {
-		capture := "(" + TAG_NAME + ":" + bc + ")"
-		variants = append(variants, text.replace(r1UserPart, placeholder, capture, -1))
+	for r in rows {
+		branch := r1UserPart
+		for i, name in canonicalNames {
+			capture := "(" + name + ":" + r.values[i] + ")"
+			branch = text.replace(branch, "{" + name + "}", capture, -1)
+		}
+		variants = append(variants, branch)
 	}
 	expandedPattern := text.join(variants, " | ")
 	if r2UserPart != "" {
@@ -135,10 +117,10 @@ self.body(func(inputs) {
 
 	progressPrefix := "[==MITOOL_PROGRESS==]"
 
-	// mitool parse: auto-splits output into <barcode>.result.mic files via SMPL1 tag.
-	// We collect whatever mitool actually writes via a file-set regex — no pre-declared
-	// per-barcode saveFile calls (those would point to non-existent files when a
-	// barcode has zero hits).
+	// mitool parse auto-splits output into <tupleKey>.result.mic via the S-tags.
+	// File-set regex collects whatever mitool actually writes — barcodes with
+	// zero hits produce no file, so pre-declared per-tuple saveFile would
+	// reference non-existent files.
 	parse := exec.builder().
 		printErrStreamToStdout().
 		env("MI_PROGRESS_PREFIX", progressPrefix).
@@ -165,32 +147,24 @@ self.body(func(inputs) {
 		arg("--report").arg("report.txt").saveFile("report.txt").
 		arg("--json-report").arg("report.json").
 		saveFile("report.json").saveFileContent("report.json").
-		// mitool >=2.3.1-58-main: suppress the duplicate final-report dump
-		// to stdout. The saved report.txt/report.json are unchanged; only
-		// the live log (surfaced in the UI's per-group Logs tab) gets
-		// shorter. See .meta/mitool-demux-block-changes-shipped.md §4.
 		arg("--no-stdout-report").
-		saveFileSet("mics", "^[A-Za-z0-9]+\\.result\\.mic$").
+		// Filename layout `<v_S1>_<v_S2>...result.mic` — multi-tag uses `_` as
+		// the value separator, so the regex must include `_`.
+		saveFileSet("mics", "^[A-Za-z0-9_]+\\.result\\.mic$").
 		saveStdoutStream().
 		arg("result.mic").
 		run()
 
-	// Reports PColumn inner axis is [reportFormat]. Both formats surface the
-	// same ParseCmdReport — text is human-readable, JSON is machine-readable.
 	reportsBuilder := pcolumn.resourceMapBuilder(1)
 	reportsBuilder.add(["txt"], parse.getFile("report.txt"))
 	reportsBuilder.add(["json"], parse.getFile("report.json"))
 
 	return {
 		mics: parse.getFileSet("mics"),
-		barcodeToSample: barcodeToSample,
+		tupleToSample: tupleToSample,
 		isPaired: isPaired,
 		mitoolLog: parse.getStdoutStream(),
 		reports: reportsBuilder.build(),
-		// JSON report content (as a Value resource) — consumed by qc.tpl.tengo
-		// to extract parseReport.perSampleMatched. Companion to the File-typed
-		// `reports[*,"json"]` entry, which is for user download; saving both
-		// avoids running parse twice.
 		reportJsonContent: parse.getFileContent("report.json")
 	}
 })
