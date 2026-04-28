@@ -33,7 +33,14 @@ text := import("text")
 
 self.defineOutputs("mics", "tupleToSample", "mitoolLog", "reports", "reportJsonContent")
 
-mitoolSw := assets.importSoftware("@platforma-open/milaboratories.software-mitool:main")
+// `memory-from-limits` entrypoint pins JVM `-Xmx` to the requested container
+// memory (`min(ram*85%, ram-2500)` MiB), instead of the `:main` entrypoint's
+// `MaxRAMPercentage=80%` which leaves the JVM ~12.8 GiB heap for a 16 GiB
+// container. mitool parse spikes at end-of-stream when `MultiSampleRun.Writers`
+// flushes every per-tuple `MicWriter` and `ParseReportAggregator` materialises
+// per-position histograms — the tail-of-run OOM that the platform's K8s OOM
+// retry was masking by re-running with doubled RAM.
+mitoolSw := assets.importSoftware("@platforma-open/milaboratories.software-mitool:memory-from-limits")
 
 self.body(func(inputs) {
 	perGroupRows := inputs.perGroupRows
@@ -145,7 +152,7 @@ self.body(func(inputs) {
 		env("MI_PROGRESS_PREFIX", progressPrefix).
 		software(mitoolSw).
 		cpu(8).
-		mem("16GiB").
+		mem("32GiB").
 		arg("parse").
 		arg("--pattern").arg(expandedPattern).
 		arg("--threads").argWithVar("{system.cpu}").
