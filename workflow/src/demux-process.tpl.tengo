@@ -227,6 +227,26 @@ self.body(func(inputs) {
 	ll.assert(len(perGroupRows) > 0,
 		"every multiplexing rule cell was empty or missing usedTags — nothing to demultiplex")
 
+	// Axis-value sets that show up in the demultiplexed outputs. Stamped into
+	// `pl7.app/axisKeys/$idx` annotations on every exported column so
+	// downstream consumers can resolve axis values from this column's spec
+	// alone. Without it they have to walk the trace back to the upstream S&D
+	// dataset, whose `axisKeys/0` carries `sampleGroupId` (not `sampleId`)
+	// when the dataset is `MultiplexedFastq`.
+	outputSampleSet := {}
+	for _, rows in perGroupRows {
+		for row in rows {
+			outputSampleSet[row.sampleId] = true
+		}
+	}
+	outputSampleIdsJson := string(json.encode(maps.getKeys(outputSampleSet)))
+	// The input rules column's `axisKeys/0` already lists every
+	// `sampleGroupId` defined in the source dataset; per-group outputs
+	// (reports, qc) preserve that set, so reuse the JSON verbatim.
+	outputGroupIdsJson := rulesAnnotations["pl7.app/axisKeys/0"]
+	ll.assert(!is_undefined(outputGroupIdsJson),
+		"input rules column is missing pl7.app/axisKeys/0 annotation")
+
 	// Provenance trace for user-facing outputs. Anchored on the FASTQ input
 	// spec so the lineage chain reads "multiplexed FASTQ -> demultiplex".
 	blockTrace := pSpec.makeTrace(fastq.spec, {
@@ -246,7 +266,8 @@ self.body(func(inputs) {
 		},
 		valueType: "File",
 		annotations: {
-			"pl7.app/label": "Demultiplexed FASTQ"
+			"pl7.app/label": "Demultiplexed FASTQ",
+			"pl7.app/axisKeys/0": outputSampleIdsJson
 		},
 		axesSpec: [sampleIdAxisSpec, readIndexAxisSpec]
 	})
@@ -282,7 +303,8 @@ self.body(func(inputs) {
 		},
 		valueType: "File",
 		annotations: {
-			"pl7.app/label": "Parse report"
+			"pl7.app/label": "Parse report",
+			"pl7.app/axisKeys/0": outputGroupIdsJson
 		},
 		axesSpec: [sampleGroupIdAxisSpec, reportFormatAxisSpec]
 	}
@@ -318,7 +340,9 @@ self.body(func(inputs) {
 		},
 		valueType: "Long",
 		annotations: {
-			"pl7.app/label": "Matched reads"
+			"pl7.app/label": "Matched reads",
+			"pl7.app/axisKeys/0": outputGroupIdsJson,
+			"pl7.app/axisKeys/1": outputSampleIdsJson
 		},
 		axesSpec: [sampleGroupIdAxisSpec, sampleIdAxisSpec]
 	})
