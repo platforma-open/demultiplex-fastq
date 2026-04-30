@@ -227,6 +227,31 @@ self.body(func(inputs) {
 	ll.assert(len(perGroupRows) > 0,
 		"every multiplexing rule cell was empty or missing usedTags — nothing to demultiplex")
 
+	// Axis-value sets that show up in the demultiplexed outputs. Stamped into
+	// `pl7.app/axisKeys/$idx` annotations on every exported column so
+	// downstream consumers can resolve axis values from this column's spec
+	// alone. Without it they have to walk the trace back to the upstream S&D
+	// dataset, whose `axisKeys/0` carries `sampleGroupId` (not `sampleId`)
+	// when the dataset is `MultiplexedFastq`.
+	//
+	// Both sets derive from `perGroupRows` — i.e. groups/samples that actually
+	// reach demux-group with at least one valid alternative after the
+	// `usedTags` projection. Reusing the rules column's `axisKeys/0` would
+	// over-list: a group can exist in `dataset.content.data` (and so be in the
+	// rules' `axisKeys/0`) while having no rule cells, or with every
+	// alternative dropped as incomplete — demux-group returns nulls for that
+	// group and it is flattened out of reports/qc.
+	outputGroupSet := {}
+	outputSampleSet := {}
+	for groupId, rows in perGroupRows {
+		outputGroupSet[groupId] = true
+		for row in rows {
+			outputSampleSet[row.sampleId] = true
+		}
+	}
+	outputGroupIdsJson := string(json.encode(maps.getKeys(outputGroupSet)))
+	outputSampleIdsJson := string(json.encode(maps.getKeys(outputSampleSet)))
+
 	// Provenance trace for user-facing outputs. Anchored on the FASTQ input
 	// spec so the lineage chain reads "multiplexed FASTQ -> demultiplex".
 	blockTrace := pSpec.makeTrace(fastq.spec, {
@@ -246,7 +271,8 @@ self.body(func(inputs) {
 		},
 		valueType: "File",
 		annotations: {
-			"pl7.app/label": "Demultiplexed FASTQ"
+			"pl7.app/label": "Demultiplexed FASTQ",
+			"pl7.app/axisKeys/0": outputSampleIdsJson
 		},
 		axesSpec: [sampleIdAxisSpec, readIndexAxisSpec]
 	})
@@ -282,7 +308,8 @@ self.body(func(inputs) {
 		},
 		valueType: "File",
 		annotations: {
-			"pl7.app/label": "Parse report"
+			"pl7.app/label": "Parse report",
+			"pl7.app/axisKeys/0": outputGroupIdsJson
 		},
 		axesSpec: [sampleGroupIdAxisSpec, reportFormatAxisSpec]
 	}
@@ -318,7 +345,9 @@ self.body(func(inputs) {
 		},
 		valueType: "Long",
 		annotations: {
-			"pl7.app/label": "Matched reads"
+			"pl7.app/label": "Matched reads",
+			"pl7.app/axisKeys/0": outputGroupIdsJson,
+			"pl7.app/axisKeys/1": outputSampleIdsJson
 		},
 		axesSpec: [sampleGroupIdAxisSpec, sampleIdAxisSpec]
 	})
