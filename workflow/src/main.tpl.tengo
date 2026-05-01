@@ -39,7 +39,9 @@ wf.body(func(args) {
 			blockId: blockId,
 			tagPattern: args.tagPattern,
 			usedTags: args.usedTags,
-			limitInput: args.limitInput
+			limitInput: args.limitInput,
+			perProcessMemGB: args.perProcessMemGB,
+			perProcessCPUs: args.perProcessCPUs
 		})
 	})
 

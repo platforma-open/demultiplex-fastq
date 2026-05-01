@@ -4,10 +4,12 @@ import { refKey } from "@platforma-open/milaboratories.demultiplex-fastq.model";
 import type { PlRef } from "@platforma-sdk/model";
 import type { ListOption } from "@platforma-sdk/ui-vue";
 import {
+  PlAccordionSection,
   PlBtnGhost,
   PlBtnGroup,
   PlDropdownRef,
   PlNumberField,
+  PlSectionSeparator,
   PlTextField,
 } from "@platforma-sdk/ui-vue";
 import { computed } from "vue";
@@ -177,4 +179,29 @@ function seedDefault() {
       </template>
     </PlNumberField>
   </template>
+
+  <PlAccordionSection label="Advanced Settings">
+    <PlSectionSeparator>Resource Allocation</PlSectionSeparator>
+    <PlNumberField
+      v-model="app.model.data.perProcessMemGB"
+      label="Memory per sample process (GB)"
+      :minValue="1"
+      :maxValue="999999"
+    >
+      <template #tooltip>
+        Memory budget per demultiplex process (mitool parse and export-fastq). Default: 32 GB.
+      </template>
+    </PlNumberField>
+
+    <PlNumberField
+      v-model="app.model.data.perProcessCPUs"
+      label="CPUs per sample process"
+      :minValue="1"
+      :maxValue="999999"
+    >
+      <template #tooltip>
+        CPU count per demultiplex process (mitool parse and export-fastq). Default: 8.
+      </template>
+    </PlNumberField>
+  </PlAccordionSection>
 </template>

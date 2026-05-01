@@ -49,6 +49,8 @@ self.body(func(inputs) {
 	nestedMics := inputs.nestedMics
 	tupleToSampleByGroup := inputs.tupleToSampleByGroup
 	isPaired := inputs.params.isPaired
+	perProcessMemGB := inputs.params.perProcessMemGB
+	perProcessCPUs := inputs.params.perProcessCPUs
 
 	ll.assert(smart.isResource(nestedMics), "nestedMics must be a resource")
 	ll.assert(smart.isResource(tupleToSampleByGroup), "tupleToSampleByGroup must be a resource")
@@ -110,6 +112,15 @@ self.body(func(inputs) {
 	progressPrefix := "[==MITOOL_PROGRESS==]"
 	fastqBuilder := pcolumn.resourceMapBuilder(2)
 
+	cpuCount := 4
+	if !is_undefined(perProcessCPUs) {
+		cpuCount = perProcessCPUs
+	}
+	memSpec := "32GiB"
+	if !is_undefined(perProcessMemGB) {
+		memSpec = string(perProcessMemGB) + "GiB"
+	}
+
 	for sampleId in maps.getKeys(sampleToMics) {
 		micEntries := sampleToMics[sampleId]
 		// Deterministic input order — groupKey first, then fileName.
@@ -124,8 +135,8 @@ self.body(func(inputs) {
 			printErrStreamToStdout().
 			env("MI_PROGRESS_PREFIX", progressPrefix).
 			software(mitoolSw).
-			cpu(4).
-			mem("32GiB").
+			cpu(cpuCount).
+			mem(memSpec).
 			arg("export-fastq").
 			arg("--output-file").arg("R1.fastq.gz").arg("R1").saveFile("R1.fastq.gz")
 
