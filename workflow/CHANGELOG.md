@@ -1,5 +1,11 @@
 # @platforma-open/milaboratories.demultiplex-fastq.workflow
 
+## 1.2.3
+
+### Patch Changes
+
+- d66dd02: Added advanced settings for setting up resouce limits
+
 ## 1.2.2
 
 ### Patch Changes

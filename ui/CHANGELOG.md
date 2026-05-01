@@ -1,5 +1,13 @@
 # @platforma-open/milaboratories.demultiplex-fastq.ui
 
+## 1.2.1
+
+### Patch Changes
+
+- d66dd02: Added advanced settings for setting up resouce limits
+- Updated dependencies [d66dd02]
+  - @platforma-open/milaboratories.demultiplex-fastq.model@1.2.1
+
 ## 1.2.0
 
 ### Minor Changes

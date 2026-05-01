@@ -1,6 +1,6 @@
 {
   "name": "@platforma-open/milaboratories.demultiplex-fastq.workflow",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Block Workflow",
   "type": "module",
   "scripts": {
