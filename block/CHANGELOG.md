@@ -1,5 +1,11 @@
 # @platforma-open/milaboratories.demultiplex-fastq
 
+## 1.2.3
+
+### Patch Changes
+
+- 7943ba0: Update block and organization logos.
+
 ## 1.2.2
 
 ### Patch Changes
