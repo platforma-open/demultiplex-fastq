@@ -57,6 +57,8 @@ self.body(func(inputs) {
 	tagPattern := params.tagPattern
 	usedTags := params.usedTags
 	limitInput := params.limitInput
+	perProcessMemGB := params.perProcessMemGB
+	perProcessCPUs := params.perProcessCPUs
 
 	ll.assert(is_array(usedTags) && len(usedTags) > 0, "usedTags must be a non-empty array")
 
@@ -395,7 +397,9 @@ self.body(func(inputs) {
 				canonicalNames: canonicalNames,
 				canonicalPattern: canonicalPattern,
 				isPaired: isPaired,
-				limitInput: limitInput
+				limitInput: limitInput,
+				perProcessMemGB: perProcessMemGB,
+				perProcessCPUs: perProcessCPUs
 			}
 		}
 	)
@@ -404,7 +408,9 @@ self.body(func(inputs) {
 		nestedMics: perGroupResult.outputData("mics"),
 		tupleToSampleByGroup: perGroupResult.outputData("tupleToSample"),
 		params: smart.createJsonResource({
-			isPaired: isPaired
+			isPaired: isPaired,
+			perProcessMemGB: perProcessMemGB,
+			perProcessCPUs: perProcessCPUs
 		})
 	})
 

@@ -33,6 +33,8 @@ export type BlockData = {
   tagPattern: string;
   limitInput: number;
   runMode: "dry" | "full";
+  perProcessMemGB?: number;
+  perProcessCPUs?: number;
 };
 
 type BlockDataV1 = {
@@ -50,6 +52,8 @@ export type BlockArgs = {
   // these to canonicalise to S1/S2/... before invoking mitool.
   usedTags: string[];
   limitInput?: number;
+  perProcessMemGB?: number;
+  perProcessCPUs?: number;
 };
 
 export type InputOptions = {
@@ -61,6 +65,8 @@ export type InputOptions = {
 };
 
 const DRY_RUN_READS_DEFAULT = 100_000;
+const PER_PROCESS_MEM_GB_DEFAULT = 32;
+const PER_PROCESS_CPUS_DEFAULT = 8;
 
 // `${ref.blockId}/${ref.name}` is unique inside one project — PlRef has only
 // these two semantic fields beyond the `__isRef` tag.
@@ -107,6 +113,8 @@ const dataModel = new DataModelBuilder()
     tagPattern: "",
     limitInput: v1.limitInput,
     runMode: v1.runMode,
+    perProcessMemGB: PER_PROCESS_MEM_GB_DEFAULT,
+    perProcessCPUs: PER_PROCESS_CPUS_DEFAULT,
   }))
   .init(
     (): BlockData => ({
@@ -115,6 +123,8 @@ const dataModel = new DataModelBuilder()
       tagPattern: "",
       limitInput: DRY_RUN_READS_DEFAULT,
       runMode: "full",
+      perProcessMemGB: PER_PROCESS_MEM_GB_DEFAULT,
+      perProcessCPUs: PER_PROCESS_CPUS_DEFAULT,
     }),
   );
 
@@ -158,6 +168,8 @@ export const platforma = BlockModelV3.create(dataModel)
       tagPattern,
       usedTags: [...used].sort(),
       limitInput: data.runMode === "dry" ? data.limitInput : undefined,
+      perProcessMemGB: data.perProcessMemGB,
+      perProcessCPUs: data.perProcessCPUs,
     };
   })
 

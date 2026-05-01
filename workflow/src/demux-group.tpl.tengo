@@ -48,6 +48,8 @@ self.body(func(inputs) {
 	canonicalPattern := inputs.canonicalPattern
 	isPaired := inputs.isPaired
 	limitInput := inputs.limitInput
+	perProcessMemGB := inputs.perProcessMemGB
+	perProcessCPUs := inputs.perProcessCPUs
 
 	currentKey := inputs[pConstants.KEY_FIELD_NAME]
 	ll.assert(is_array(currentKey) && len(currentKey) > 0, "expected key to contain groupId")
@@ -147,12 +149,21 @@ self.body(func(inputs) {
 	// File-set regex collects whatever mitool actually writes — barcodes with
 	// zero hits produce no file, so pre-declared per-tuple saveFile would
 	// reference non-existent files.
+	cpuCount := 8
+	if !is_undefined(perProcessCPUs) {
+		cpuCount = perProcessCPUs
+	}
+	memSpec := "32GiB"
+	if !is_undefined(perProcessMemGB) {
+		memSpec = string(perProcessMemGB) + "GiB"
+	}
+
 	parse := exec.builder().
 		printErrStreamToStdout().
 		env("MI_PROGRESS_PREFIX", progressPrefix).
 		software(mitoolSw).
-		cpu(8).
-		mem("32GiB").
+		cpu(cpuCount).
+		mem(memSpec).
 		arg("parse").
 		arg("--pattern").arg(expandedPattern).
 		arg("--threads").argWithVar("{system.cpu}").
