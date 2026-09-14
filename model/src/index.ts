@@ -1,3 +1,5 @@
+import type { BlockParams, RunMode } from "@platforma-open/milaboratories.demultiplex-fastq.kind";
+import { kind } from "@platforma-open/milaboratories.demultiplex-fastq.kind";
 import type { InferOutputsType, PlRef } from "@platforma-sdk/model";
 import {
   BlockModelV3,
@@ -5,6 +7,10 @@ import {
   isPColumnSpec,
   parseResourceMap,
 } from "@platforma-sdk/model";
+import { deriveTemplateParams } from "./templateParams";
+
+export type { BlockParams, RunMode };
+export { deriveTemplateParams };
 
 const MITOOL_PROGRESS_PREFIX = "[==MITOOL_PROGRESS==]";
 
@@ -32,7 +38,7 @@ export type BlockData = {
   inputNucleotidesOnly: boolean;
   tagPattern: string;
   limitInput: number;
-  runMode: "dry" | "full";
+  runMode: RunMode;
   perProcessMemGB?: number;
   perProcessCPUs?: number;
 };
@@ -42,7 +48,7 @@ type BlockDataV1 = {
   barcodeSourceRef?: PlRef;
   tagPattern: string;
   limitInput: number;
-  runMode: "dry" | "full";
+  runMode: RunMode;
 };
 
 export type BlockArgs = {
@@ -101,7 +107,27 @@ function parseTagsAnnotation(raw: string | undefined): string[] | undefined {
   return parsed;
 }
 
-const dataModel = new DataModelBuilder()
+/**
+ * A block's starting state, seeded by whatever the creator or a project template supplied.
+ * Read together with `deriveTemplateParams`, its mirror image: a field added to the contract
+ * but not to both functions is silently dropped from every template.
+ *
+ * The two snapshot fields default to "no tags, not nucleotides" rather than to anything
+ * permissive — a block created without an input must not look like one whose dataset passed the
+ * nucleotide gate.
+ */
+export const initBlockData = (params?: BlockParams): BlockData => ({
+  inputRef: params?.inputRef,
+  inputBarcodeTags: [...(params?.inputBarcodeTags ?? [])],
+  inputNucleotidesOnly: params?.inputNucleotidesOnly ?? false,
+  tagPattern: params?.tagPattern ?? "",
+  limitInput: params?.limitInput ?? DRY_RUN_READS_DEFAULT,
+  runMode: params?.runMode ?? "full",
+  perProcessMemGB: PER_PROCESS_MEM_GB_DEFAULT,
+  perProcessCPUs: PER_PROCESS_CPUS_DEFAULT,
+});
+
+const dataModel = new DataModelBuilder({ kind })
   .from<BlockDataV1>("v1")
   .migrate<BlockData>("v2", (v1) => ({
     inputRef: undefined,
@@ -116,19 +142,9 @@ const dataModel = new DataModelBuilder()
     perProcessMemGB: PER_PROCESS_MEM_GB_DEFAULT,
     perProcessCPUs: PER_PROCESS_CPUS_DEFAULT,
   }))
-  .init(
-    (): BlockData => ({
-      inputBarcodeTags: [],
-      inputNucleotidesOnly: false,
-      tagPattern: "",
-      limitInput: DRY_RUN_READS_DEFAULT,
-      runMode: "full",
-      perProcessMemGB: PER_PROCESS_MEM_GB_DEFAULT,
-      perProcessCPUs: PER_PROCESS_CPUS_DEFAULT,
-    }),
-  );
+  .init(({ params }) => initBlockData(params));
 
-export const platforma = BlockModelV3.create(dataModel)
+export const platforma = BlockModelV3.create({ dataModel, kind })
 
   .args<BlockArgs>((data) => {
     if (!data.inputRef) throw new Error("Multiplexing rules column is required");
@@ -266,6 +282,8 @@ export const platforma = BlockModelV3.create(dataModel)
     if (!spec || !isPColumnSpec(spec)) return undefined;
     return ctx.resultPool.findLabelsForColumnAxis(spec, 1);
   })
+
+  .templateParams(deriveTemplateParams)
 
   .title(() => "FASTQ Demultiplexing")
 
