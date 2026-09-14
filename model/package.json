@@ -1,9 +1,11 @@
 {
   "name": "@platforma-open/milaboratories.demultiplex-fastq.model",
   "version": "1.2.1",
+  "private": true,
   "description": "Block model",
   "type": "module",
-  "main": "dist/index.js",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
@@ -20,6 +22,7 @@
     "check": "ts-builder check --target block-model"
   },
   "dependencies": {
+    "@platforma-open/milaboratories.demultiplex-fastq.kind": "workspace:*",
     "@platforma-sdk/model": "catalog:"
   },
   "devDependencies": {
