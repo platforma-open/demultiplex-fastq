@@ -257,9 +257,6 @@ importers:
       shx:
         specifier: 'catalog:'
         version: 0.4.0
-      vitest:
-        specifier: 'catalog:'
-        version: 4.0.18(@types/node@25.3.2)(lightningcss@1.32.0)(yaml@2.8.1)
 
 packages:
 
