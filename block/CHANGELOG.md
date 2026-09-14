@@ -1,5 +1,13 @@
 # @platforma-open/milaboratories.demultiplex-fastq
 
+## 1.3.0
+
+### Minor Changes
+
+- 9ac3250: Adopt the block-kind contract: a block now declares the params it can be created
+  with, so a project template can carry a configured demultiplexing run between
+  projects.
+
 ## 1.2.5
 
 ### Patch Changes
