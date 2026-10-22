@@ -35,3 +35,6 @@ catalog:
   vitest: ~4.0.18
   typescript: ~5.9.3
   "es-toolkit": 1.52.0
+
+  # other blocks used in tests
+  "@platforma-open/milaboratories.samples-and-data": 1.24.0

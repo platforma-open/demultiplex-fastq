@@ -15,6 +15,9 @@ catalogs:
     '@milaboratories/ts-configs':
       specifier: 1.4.0
       version: 1.4.0
+    '@platforma-open/milaboratories.samples-and-data':
+      specifier: 1.24.0
+      version: 1.24.0
     '@platforma-open/milaboratories.software-mitool':
       specifier: 2.3.1-172-main
       version: 2.3.1-172-main
@@ -185,6 +188,15 @@ importers:
 
   test:
     dependencies:
+      '@platforma-open/milaboratories.demultiplex-fastq.model':
+        specifier: workspace:*
+        version: link:../model
+      '@platforma-open/milaboratories.samples-and-data':
+        specifier: 'catalog:'
+        version: 1.24.0
+      '@platforma-sdk/model':
+        specifier: 'catalog:'
+        version: 1.85.2
       this-block:
         specifier: workspace:@platforma-open/milaboratories.demultiplex-fastq@*
         version: link:../block
@@ -1532,6 +1544,9 @@ packages:
   '@pkgjs/parseargs@0.11.0':
     resolution: {integrity: sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg==}
     engines: {node: '>=14'}
+
+  '@platforma-open/milaboratories.samples-and-data@1.24.0':
+    resolution: {integrity: sha512-j2FlpUAkI1YNx+qF+RibSI9HEoYyiK0MvYX9CtNdtCpqTAJfVxvjN7USPCEP36yZbkpNGXzqEm0hLsRFyhJohg==}
 
   '@platforma-open/milaboratories.software-mitool@2.3.1-172-main':
     resolution: {integrity: sha512-jNtNApS6b50kgfbgnwn7Hc5TSmHzuZvsc8fiMyhJfQ/kkYK2l/MrZOA924/XiaZlFqk11usEQSqQMD/TopauFg==}
@@ -6236,14 +6251,14 @@ snapshots:
       '@milaboratories/helpers': 1.14.5
       '@milaboratories/pl-error-like': 1.12.10
       canonicalize: 2.1.0
-      es-toolkit: 1.42.0
+      es-toolkit: 1.52.0
       zod: 3.25.76
 
   '@milaboratories/pl-model-middle-layer@1.30.7':
     dependencies:
       '@milaboratories/helpers': 1.14.2
       '@milaboratories/pl-model-common': 1.46.2
-      es-toolkit: 1.42.0
+      es-toolkit: 1.52.0
       utility-types: 3.11.0
       zod: 3.25.76
 
@@ -6251,7 +6266,7 @@ snapshots:
     dependencies:
       '@milaboratories/helpers': 1.14.5
       '@milaboratories/pl-model-common': 1.53.0
-      es-toolkit: 1.42.0
+      es-toolkit: 1.52.0
       utility-types: 3.11.0
       zod: 3.25.76
 
@@ -6794,6 +6809,8 @@ snapshots:
   '@pkgjs/parseargs@0.11.0':
     optional: true
 
+  '@platforma-open/milaboratories.samples-and-data@1.24.0': {}
+
   '@platforma-open/milaboratories.software-mitool@2.3.1-172-main': {}
 
   '@platforma-open/milaboratories.software-ptabler.schema@1.15.27':
@@ -6861,7 +6878,7 @@ snapshots:
       '@milaboratories/pl-model-middle-layer': 1.34.3
       '@milaboratories/ptabler-expression-js': 1.2.43
       canonicalize: 2.1.0
-      es-toolkit: 1.42.0
+      es-toolkit: 1.52.0
       fast-json-patch: 3.1.1
       lru-cache: 11.2.4
       utility-types: 3.11.0

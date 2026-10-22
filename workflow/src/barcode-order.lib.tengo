@@ -1,0 +1,66 @@
+// Ordering and overlap checks over one sampleGroup's barcode rows.
+// A row is { sampleId, values: [v_S1, v_S2, ...], tupleKey }.
+
+slices := import("@platforma-sdk/workflow-tengo:slices")
+text := import("text")
+
+totalLength := func(row) {
+	n := 0
+	for v in row.values {
+		n += len(v)
+	}
+	return n
+}
+
+// mitool ranks `||` alternatives by mismatch cost alone and keeps the first on a
+// tie, so a barcode listed before a longer barcode it prefixes takes that
+// barcode's reads. Longest tuple first; tupleKey keeps the order deterministic.
+orderRows := func(rows) {
+	return slices.quickSortFn(rows, func(a, b) {
+		la := totalLength(a)
+		lb := totalLength(b)
+		if la != lb {
+			return la > lb
+		}
+		return a.tupleKey < b.tupleKey
+	})
+}
+
+// True when `long` and `short` belong to different samples and every value of
+// `short` is a prefix of the matching value of `long`.
+extends := func(long, short) {
+	if long.sampleId == short.sampleId || long.tupleKey == short.tupleKey {
+		return false
+	}
+	for i, v in short.values {
+		if !text.has_prefix(long.values[i], v) {
+			return false
+		}
+	}
+	return true
+}
+
+// Sample pairs whose barcodes overlap at the start: a read carrying `longer`
+// followed by sequence matching the rest also matches `shorter` exactly.
+// Ordered by orderRows over `longer`, then over `shorter`.
+prefixOverlaps := func(rows) {
+	ordered := orderRows(rows)
+	out := []
+	for i, long in ordered {
+		for j := i + 1; j < len(ordered); j++ {
+			short := ordered[j]
+			if extends(long, short) {
+				out = append(out, {
+					longer: { sampleId: long.sampleId, barcodes: long.values },
+					shorter: { sampleId: short.sampleId, barcodes: short.values }
+				})
+			}
+		}
+	}
+	return out
+}
+
+export {
+	orderRows: orderRows,
+	prefixOverlaps: prefixOverlaps
+}

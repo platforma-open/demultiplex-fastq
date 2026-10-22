@@ -27,9 +27,9 @@ exec := import("@platforma-sdk/workflow-tengo:exec")
 assets := import("@platforma-sdk/workflow-tengo:assets")
 pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
 pcolumn := import("@platforma-sdk/workflow-tengo:pframes.pcolumn")
-slices := import("@platforma-sdk/workflow-tengo:slices")
 json := import("json")
 text := import("text")
+barcodeOrder := import(":barcode-order")
 
 self.defineOutputs("mics", "tupleToSample", "mitoolLog", "reports", "reportJsonContent")
 
@@ -67,10 +67,8 @@ self.body(func(inputs) {
 		}
 	}
 
-	// Deterministic branch order for cache-key stability — sort rows by tupleKey.
-	rows = slices.quickSortFn(rows, func(a, b) {
-		return a.tupleKey < b.tupleKey
-	})
+	// Alternative order decides which sample wins when one barcode prefixes another.
+	rows = barcodeOrder.orderRows(rows)
 
 	tupleToSample := {}
 	for r in rows {

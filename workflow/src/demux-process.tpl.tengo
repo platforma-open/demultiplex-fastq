@@ -24,13 +24,15 @@ demuxGroupTpl := assets.importTemplate(":demux-group")
 exportBySampleTpl := assets.importTemplate(":export-by-sample")
 flattenWithGroupTpl := assets.importTemplate(":flatten-with-group")
 qcTpl := assets.importTemplate(":qc")
+barcodeOrder := import(":barcode-order")
 
 self.defineOutputs(
 	"demultiplexedFastqSpec", "demultiplexedFastqData",
 	"mitoolLogsSpec", "mitoolLogsData",
 	"reportsSpec", "reportsData",
 	"qcSpec", "qcData",
-	"qcGroupSummary"
+	"qcGroupSummary",
+	"barcodeOverlaps"
 )
 
 self.awaitState("bundle", "PColumnBundleWithPartitions")
@@ -228,6 +230,20 @@ self.body(func(inputs) {
 	}
 	ll.assert(len(perGroupRows) > 0,
 		"every multiplexing rule cell was empty or missing usedTags — nothing to demultiplex")
+
+	// A read carrying the longer barcode, or the shorter one followed by the
+	// longer one's remaining bases, matches both; mitool assigns it to the longer.
+	overlapPairs := []
+	for groupId in maps.getKeys(perGroupRows) {
+		for pair in barcodeOrder.prefixOverlaps(perGroupRows[groupId]) {
+			overlapPairs = append(overlapPairs, {
+				sampleGroupId: groupId,
+				longer: pair.longer,
+				shorter: pair.shorter
+			})
+		}
+	}
+	barcodeOverlaps := smart.createJsonResource({ tags: usedTags, pairs: overlapPairs })
 
 	// Axis-value sets that show up in the demultiplexed outputs. Stamped into
 	// `pl7.app/axisKeys/$idx` annotations on every exported column so
@@ -433,6 +449,7 @@ self.body(func(inputs) {
 		reportsData: reportsFlat.output("flat"),
 		qcSpec: qcSpec,
 		qcData: qcResult.output("qcData"),
-		qcGroupSummary: qcResult.output("qcGroupSummary")
+		qcGroupSummary: qcResult.output("qcGroupSummary"),
+		barcodeOverlaps: barcodeOverlaps
 	}
 })

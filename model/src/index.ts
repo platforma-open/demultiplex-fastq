@@ -70,6 +70,15 @@ export type InputOptions = {
   factsByRef: Record<string, InputFacts>;
 };
 
+export type OverlapSide = { sampleId: string; barcodes: string[] };
+
+// Pairs of samples in one sampleGroup where every barcode of `shorter` is a
+// prefix of the matching barcode of `longer`. `barcodes` follow `tags` order.
+export type BarcodeOverlaps = {
+  tags: string[];
+  pairs: { sampleGroupId: string; longer: OverlapSide; shorter: OverlapSide }[];
+};
+
 const DRY_RUN_READS_DEFAULT = 100_000;
 const PER_PROCESS_MEM_GB_DEFAULT = 32;
 const PER_PROCESS_CPUS_DEFAULT = 8;
@@ -265,6 +274,12 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     ctx.outputs
       ?.resolve({ field: "qcGroupSummary", allowPermanentAbsence: true })
       ?.getDataAsJson<Record<string, { total: number; matched: number }>>(),
+  )
+
+  .output("barcodeOverlaps", (ctx) =>
+    ctx.outputs
+      ?.resolve({ field: "barcodeOverlaps", allowPermanentAbsence: true })
+      ?.getDataAsJson<BarcodeOverlaps>(),
   )
 
   .output("sampleGroupLabels", (ctx) => {
