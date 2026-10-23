@@ -157,6 +157,7 @@ self.body(func(inputs) {
 	}
 
 	parse := exec.builder().
+		name("demux-parse").
 		printErrStreamToStdout().
 		env("MI_PROGRESS_PREFIX", progressPrefix).
 		software(mitoolSw).
