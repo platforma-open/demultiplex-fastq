@@ -16,8 +16,8 @@ catalogs:
       specifier: 1.4.0
       version: 1.4.0
     '@platforma-open/milaboratories.software-mitool':
-      specifier: 2.3.1-59-main
-      version: 2.3.1-59-main
+      specifier: 2.3.1-174-main
+      version: 2.3.1-174-main
     '@platforma-sdk/block-kind':
       specifier: 1.1.0
       version: 1.1.0
@@ -243,7 +243,7 @@ importers:
     dependencies:
       '@platforma-open/milaboratories.software-mitool':
         specifier: 'catalog:'
-        version: 2.3.1-59-main
+        version: 2.3.1-174-main
       '@platforma-sdk/workflow-tengo':
         specifier: 'catalog:'
         version: 6.10.0
@@ -1533,8 +1533,8 @@ packages:
     resolution: {integrity: sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg==}
     engines: {node: '>=14'}
 
-  '@platforma-open/milaboratories.software-mitool@2.3.1-59-main':
-    resolution: {integrity: sha512-hDmdLzzZS1vU+bH3pYBnCI1KusyxVrUXUrtI3ZRdbnupysdG+5fywy7Vw5lRFMxriQxDjKGyEkH0+66hbT2iZg==}
+  '@platforma-open/milaboratories.software-mitool@2.3.1-174-main':
+    resolution: {integrity: sha512-9A4XgO7oqMVmvdZL3vNDkgvloejdvh1+Kq6rfoBfB8/dWVJ4woQmEepIi0bLUfcJHQbjb7lVO79VhVRERc7EGg==}
 
   '@platforma-open/milaboratories.software-ptabler.schema@1.15.22':
     resolution: {integrity: sha512-f9vT+iSfNelgAGjaNzn1GErhmxHbjG6HtskAMoaUEbrciCG8c8i8cSCJPLu0xKNBcjM1UW+T10uD89Ckq2vkxQ==}
@@ -6864,7 +6864,7 @@ snapshots:
   '@pkgjs/parseargs@0.11.0':
     optional: true
 
-  '@platforma-open/milaboratories.software-mitool@2.3.1-59-main': {}
+  '@platforma-open/milaboratories.software-mitool@2.3.1-174-main': {}
 
   '@platforma-open/milaboratories.software-ptabler.schema@1.15.22':
     dependencies:
