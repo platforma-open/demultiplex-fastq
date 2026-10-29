@@ -2,6 +2,7 @@ import type { BlockData, platforma } from "@platforma-open/milaboratories.demult
 import { SamplesAndDataBlockPointer } from "@platforma-open/milaboratories.samples-and-data";
 import type { PlRef } from "@platforma-sdk/model";
 import { isPlRef, readOutput, uniquePlId, wrapOutputs } from "@platforma-sdk/model";
+import type { ML, RawHelpers } from "@platforma-sdk/test";
 import { awaitStableState, blockTest } from "@platforma-sdk/test";
 import { DemultiplexFastqBlockPointer as myBlockSpec } from "this-block";
 
@@ -22,6 +23,95 @@ function firstOptionRef(inputOptions: unknown): PlRef {
   const ref = typeof first === "object" && first !== null && "ref" in first ? first.ref : undefined;
   if (!isPlRef(ref)) throw new Error(`first option has no PlRef: ${JSON.stringify(first)}`);
   return ref;
+}
+
+type MultiplexedSample = { label: string; barcode: string };
+
+// Adds and runs Samples & Data with one paired-end group read from
+// `assets/<fixture>_R{1,2}.fastq.gz`: one rule per sample on tag BC. Returns its
+// block id and the sample ids in `samples` order.
+async function addMultiplexedSamples(
+  project: ML.Project,
+  helpers: RawHelpers,
+  fixture: string,
+  samples: MultiplexedSample[],
+): Promise<{ sndBlockId: string; groupId: string; sampleIds: string[] }> {
+  const sndBlockId = await project.addBlock("Samples & Data", SamplesAndDataBlockPointer);
+  const groupId = uniquePlId();
+  const sampleIds = samples.map(() => uniquePlId());
+  const labels = Object.fromEntries(sampleIds.map((id, i) => [id, samples[i].label]));
+  const r1Handle = await helpers.getLocalFileHandle(`./assets/${fixture}_R1.fastq.gz`);
+  const r2Handle = await helpers.getLocalFileHandle(`./assets/${fixture}_R2.fastq.gz`);
+
+  await project.mutateBlockStorage(sndBlockId, {
+    operation: "update-block-data",
+    value: {
+      metadata: [],
+      sampleIds,
+      sampleLabelColumnLabel: "Sample Name",
+      sampleLabels: labels,
+      datasets: [
+        {
+          id: uniquePlId(),
+          label: "Multiplexed",
+          content: {
+            type: "MultiplexedFastq",
+            readIndices: ["R1", "R2"],
+            gzipped: true,
+            groupLabels: { [groupId]: "Pool" },
+            sampleGroups: { [groupId]: labels },
+            data: { [groupId]: { R1: r1Handle, R2: r2Handle } },
+            barcodeTags: ["BC"],
+            barcodeRules: sampleIds.map((sampleId, i) => ({
+              ruleId: `r-${samples[i].label}`,
+              sampleGroupId: groupId,
+              sampleId,
+              barcodes: { BC: samples[i].barcode },
+            })),
+          },
+        },
+      ],
+      h5adFilesToPreprocess: [],
+      seuratFilesToPreprocess: [],
+      suggestedImport: false,
+    },
+  });
+  await project.runBlock(sndBlockId);
+  await helpers.awaitBlockDone(sndBlockId, 120000);
+  return { sndBlockId, groupId, sampleIds };
+}
+
+// Configures and runs a demux block on `inputRef`, returning its outputs.
+async function runDemux(
+  project: ML.Project,
+  helpers: RawHelpers,
+  blockId: string,
+  inputRef: PlRef,
+  tagPattern: string,
+) {
+  await project.mutateBlockStorage(blockId, {
+    operation: "update-block-data",
+    value: {
+      inputRef,
+      inputBarcodeTags: ["BC"],
+      inputNucleotidesOnly: true,
+      tagPattern,
+      limitInput: 100000,
+      runMode: "full",
+      perProcessMemGB: 2,
+      perProcessCPUs: 2,
+    } satisfies BlockData,
+  });
+  await project.runBlock(blockId);
+  const state = await helpers.awaitBlockDoneAndGetStableBlockState<typeof platforma>(
+    blockId,
+    300000,
+  );
+  return wrapOutputs(defined(state.outputs, "outputs"));
+}
+
+function matchedBySample(outputs: Awaited<ReturnType<typeof runDemux>>): Record<string, number> {
+  return Object.fromEntries(defined(outputs.qc, "qc").map((r) => [r.sampleId, r.matched]));
 }
 
 // A block created with no template goes through the kind's own init path, so this covers the
@@ -46,113 +136,52 @@ blockTest(
   "barcodes of different lengths, one a prefix of another",
   { timeout: 600000 },
   async ({ rawPrj: project, helpers, expect }) => {
-    const sndBlockId = await project.addBlock("Samples & Data", SamplesAndDataBlockPointer);
+    const {
+      sndBlockId,
+      groupId,
+      sampleIds: [shortId, longId, otherId],
+    } = await addMultiplexedSamples(project, helpers, "prefix_barcodes", [
+      { label: "short", barcode: "ACGTACG" },
+      { label: "long", barcode: "ACGTACGTTG" },
+      { label: "other", barcode: "TGCATGC" },
+    ]);
     const demuxBlockId = await project.addBlock("FASTQ Demultiplexing", myBlockSpec);
-
-    const groupId = uniquePlId();
-    const shortId = uniquePlId();
-    const longId = uniquePlId();
-    const otherId = uniquePlId();
-    const r1Handle = await helpers.getLocalFileHandle("./assets/prefix_barcodes_R1.fastq.gz");
-    const r2Handle = await helpers.getLocalFileHandle("./assets/prefix_barcodes_R2.fastq.gz");
-
-    await project.mutateBlockStorage(sndBlockId, {
-      operation: "update-block-data",
-      value: {
-        metadata: [],
-        sampleIds: [shortId, longId, otherId],
-        sampleLabelColumnLabel: "Sample Name",
-        sampleLabels: { [shortId]: "short", [longId]: "long", [otherId]: "other" },
-        datasets: [
-          {
-            id: uniquePlId(),
-            label: "Multiplexed",
-            content: {
-              type: "MultiplexedFastq",
-              readIndices: ["R1", "R2"],
-              gzipped: true,
-              groupLabels: { [groupId]: "Pool" },
-              sampleGroups: {
-                [groupId]: { [shortId]: "short", [longId]: "long", [otherId]: "other" },
-              },
-              data: { [groupId]: { R1: r1Handle, R2: r2Handle } },
-              barcodeTags: ["BC"],
-              barcodeRules: [
-                {
-                  ruleId: "r-short",
-                  sampleGroupId: groupId,
-                  sampleId: shortId,
-                  barcodes: { BC: "ACGTACG" },
-                },
-                {
-                  ruleId: "r-long",
-                  sampleGroupId: groupId,
-                  sampleId: longId,
-                  barcodes: { BC: "ACGTACGTTG" },
-                },
-                {
-                  ruleId: "r-other",
-                  sampleGroupId: groupId,
-                  sampleId: otherId,
-                  barcodes: { BC: "TGCATGC" },
-                },
-              ],
-            },
-          },
-        ],
-        h5adFilesToPreprocess: [],
-        seuratFilesToPreprocess: [],
-        suggestedImport: false,
-      },
-    });
-    await project.runBlock(sndBlockId);
-    await helpers.awaitBlockDone(sndBlockId, 120000);
 
     // The rules column reaches the demux block through the result pool, as in the UI. The block
     // has not run, so its state is untyped; only the ref is narrowed.
     const optionsState = await awaitStableState(project.getBlockState(demuxBlockId), 30000);
     const optionsOutputs = defined(optionsState.outputs, "outputs");
-    expect(optionsOutputs.inputOptions).toMatchObject({
-      ok: true,
-      value: { options: [{ ref: { blockId: sndBlockId } }] },
-    });
     const inputRef = firstOptionRef(
       readOutput(defined(optionsOutputs.inputOptions, "inputOptions")),
     );
     expect(optionsOutputs.inputOptions).toMatchObject({
+      ok: true,
       value: {
+        options: [{ ref: { blockId: sndBlockId } }],
         factsByRef: {
-          [`${inputRef.blockId}/${inputRef.name}`]: { tags: ["BC"], nucleotidesOnly: true },
+          [`${inputRef.blockId}/${inputRef.name}`]: {
+            tags: ["BC"],
+            nucleotidesOnly: true,
+          },
         },
       },
     });
 
-    await project.mutateBlockStorage(demuxBlockId, {
-      operation: "update-block-data",
-      value: {
-        inputRef,
-        inputBarcodeTags: ["BC"],
-        inputNucleotidesOnly: true,
-        tagPattern: "^{BC}(R1:*)\\^(R2:*)",
-        limitInput: 100000,
-        runMode: "full",
-        perProcessMemGB: 2,
-        perProcessCPUs: 2,
-      } satisfies BlockData,
-    });
-    await project.runBlock(demuxBlockId);
-    const state = await helpers.awaitBlockDoneAndGetStableBlockState<typeof platforma>(
+    const outputs = await runDemux(
+      project,
+      helpers,
       demuxBlockId,
-      300000,
+      inputRef,
+      "^{BC}(R1:*)\\^(R2:*)",
     );
-    const outputs = wrapOutputs(defined(state.outputs, "outputs"));
 
     // Each read lands in its own sample. Listed alphabetically, ACGTACG came first and took
     // all 50 "long" reads.
-    const matched = Object.fromEntries(
-      defined(outputs.qc, "qc").map((r) => [r.sampleId, r.matched]),
-    );
-    expect(matched).toEqual({ [shortId]: 20, [longId]: 50, [otherId]: 10 });
+    expect(matchedBySample(outputs)).toEqual({
+      [shortId]: 20,
+      [longId]: 50,
+      [otherId]: 10,
+    });
 
     expect(outputs.barcodeOverlaps).toEqual({
       tags: ["BC"],
@@ -176,94 +205,37 @@ blockTest(
   "same barcode tag on both mates drops crossover chimeras",
   { timeout: 600000 },
   async ({ rawPrj: project, helpers, expect }) => {
-    const sndBlockId = await project.addBlock("Samples & Data", SamplesAndDataBlockPointer);
+    const {
+      sampleIds: [aId, bId],
+    } = await addMultiplexedSamples(project, helpers, "crossover", [
+      { label: "a", barcode: "GATCGTA" },
+      { label: "b", barcode: "CTAGCAT" },
+    ]);
     const r1OnlyBlockId = await project.addBlock("FASTQ Demultiplexing", myBlockSpec);
     const bothBlockId = await project.addBlock("FASTQ Demultiplexing", myBlockSpec);
-
-    const groupId = uniquePlId();
-    const aId = uniquePlId();
-    const bId = uniquePlId();
-    const r1Handle = await helpers.getLocalFileHandle("./assets/crossover_R1.fastq.gz");
-    const r2Handle = await helpers.getLocalFileHandle("./assets/crossover_R2.fastq.gz");
-
-    await project.mutateBlockStorage(sndBlockId, {
-      operation: "update-block-data",
-      value: {
-        metadata: [],
-        sampleIds: [aId, bId],
-        sampleLabelColumnLabel: "Sample Name",
-        sampleLabels: { [aId]: "a", [bId]: "b" },
-        datasets: [
-          {
-            id: uniquePlId(),
-            label: "Multiplexed",
-            content: {
-              type: "MultiplexedFastq",
-              readIndices: ["R1", "R2"],
-              gzipped: true,
-              groupLabels: { [groupId]: "Pool" },
-              sampleGroups: { [groupId]: { [aId]: "a", [bId]: "b" } },
-              data: { [groupId]: { R1: r1Handle, R2: r2Handle } },
-              barcodeTags: ["BC"],
-              barcodeRules: [
-                {
-                  ruleId: "r-a",
-                  sampleGroupId: groupId,
-                  sampleId: aId,
-                  barcodes: { BC: "GATCGTA" },
-                },
-                {
-                  ruleId: "r-b",
-                  sampleGroupId: groupId,
-                  sampleId: bId,
-                  barcodes: { BC: "CTAGCAT" },
-                },
-              ],
-            },
-          },
-        ],
-        h5adFilesToPreprocess: [],
-        seuratFilesToPreprocess: [],
-        suggestedImport: false,
-      },
-    });
-    await project.runBlock(sndBlockId);
-    await helpers.awaitBlockDone(sndBlockId, 120000);
 
     const optionsState = await awaitStableState(project.getBlockState(bothBlockId), 30000);
     const inputRef = firstOptionRef(
       readOutput(defined(defined(optionsState.outputs, "outputs").inputOptions, "inputOptions")),
     );
 
-    const runDemux = async (blockId: string, tagPattern: string) => {
-      await project.mutateBlockStorage(blockId, {
-        operation: "update-block-data",
-        value: {
-          inputRef,
-          inputBarcodeTags: ["BC"],
-          inputNucleotidesOnly: true,
-          tagPattern,
-          limitInput: 100000,
-          runMode: "full",
-          perProcessMemGB: 2,
-          perProcessCPUs: 2,
-        } satisfies BlockData,
-      });
-      await project.runBlock(blockId);
-      const state = await helpers.awaitBlockDoneAndGetStableBlockState<typeof platforma>(
-        blockId,
-        300000,
-      );
-      const outputs = wrapOutputs(defined(state.outputs, "outputs"));
-      return Object.fromEntries(defined(outputs.qc, "qc").map((r) => [r.sampleId, r.matched]));
-    };
-
     // R1 only: each chimera goes to its R1 barcode's sample.
-    expect(await runDemux(r1OnlyBlockId, "^{BC}(R1:*)\\^(R2:*)")).toEqual({ [aId]: 45, [bId]: 25 });
+    const r1Only = await runDemux(
+      project,
+      helpers,
+      r1OnlyBlockId,
+      inputRef,
+      "^{BC}(R1:*)\\^(R2:*)",
+    );
+    expect(matchedBySample(r1Only)).toEqual({ [aId]: 45, [bId]: 25 });
     // Both mates: only pairs with the sample's barcode on R1 and R2.
-    expect(await runDemux(bothBlockId, "^{BC}(R1:*)\\^{BC}(R2:*)")).toEqual({
-      [aId]: 30,
-      [bId]: 20,
-    });
+    const both = await runDemux(
+      project,
+      helpers,
+      bothBlockId,
+      inputRef,
+      "^{BC}(R1:*)\\^{BC}(R2:*)",
+    );
+    expect(matchedBySample(both)).toEqual({ [aId]: 30, [bId]: 20 });
   },
 );
