@@ -1,0 +1,48 @@
+// Per-sample matched-read accumulation for the QC Report table.
+//
+// A sample can carry more than one barcode within a sampleGroup. Each barcode is
+// its own `perSampleMatched` entry with its own tuple key, and every one of them
+// resolves to the same sampleId, so the counts are summed.
+
+ll := import("@platforma-sdk/workflow-tengo:ll")
+json := import("json")
+text := import("text")
+
+// tupleKey joins an entry's sampleKey values with "_", the form tupleToSample is keyed by.
+tupleKey := func(sampleKey) {
+	parts := []
+	for v in sampleKey {
+		parts = append(parts, string(v))
+	}
+	return text.join(parts, "_")
+}
+
+// addPerSampleMatched folds one group's perSampleMatched entries into flat, keyed by
+// the JSON-encoded [sampleGroupId, sampleId] pair. An entry whose tuple is absent from
+// t2s is dropped silently, matching export-by-sample. Mutates and returns flat.
+addPerSampleMatched := func(flat, sampleGroupId, perSample, t2s) {
+	for entry in perSample {
+		ll.assert(is_map(entry) && is_array(entry.sampleKey),
+			"group %s perSampleMatched entry malformed: %v", sampleGroupId, entry)
+		ll.assert(len(entry.sampleKey) >= 1,
+			"group %s perSampleMatched entry has empty sampleKey", sampleGroupId)
+
+		sampleId := t2s[tupleKey(entry.sampleKey)]
+		if is_undefined(sampleId) {
+			continue
+		}
+
+		key := json.encode([sampleGroupId, sampleId])
+		prevMatched := flat[key]
+		if is_undefined(prevMatched) {
+			prevMatched = 0
+		}
+		flat[key] = prevMatched + entry.matched
+	}
+	return flat
+}
+
+export {
+	tupleKey: tupleKey,
+	addPerSampleMatched: addPerSampleMatched
+}

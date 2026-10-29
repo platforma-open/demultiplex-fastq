@@ -1,0 +1,86 @@
+// Ordering and overlap checks over one sampleGroup's barcode rows.
+// A row is { sampleId, values: [v_S1, v_S2, ...], tupleKey }.
+
+slices := import("@platforma-sdk/workflow-tengo:slices")
+text := import("text")
+
+totalLength := func(row) {
+	n := 0
+	for v in row.values {
+		n += len(v)
+	}
+	return n
+}
+
+// mitool ranks `||` alternatives by mismatch cost alone and keeps the first on a
+// tie, so a barcode listed before a longer barcode it prefixes takes that
+// barcode's reads. Longest tuple first; tupleKey keeps the order deterministic.
+orderRows := func(rows) {
+	return slices.quickSortFn(rows, func(a, b) {
+		la := totalLength(a)
+		lb := totalLength(b)
+		if la != lb {
+			return la > lb
+		}
+		return a.tupleKey < b.tupleKey
+	})
+}
+
+// pinnedTags marks each canonical name whose placeholder is directly followed by a
+// literal base somewhere in the pattern.
+pinnedTags := func(canonicalPattern, canonicalNames) {
+	out := []
+	for name in canonicalNames {
+		pinned := false
+		for base in ["A", "C", "G", "T"] {
+			if text.contains(canonicalPattern, "{" + name + "}" + base) {
+				pinned = true
+			}
+		}
+		out = append(out, pinned)
+	}
+	return out
+}
+
+// True when `long` and `short` belong to different samples, every value of `short`
+// is a prefix of the matching value of `long`, and at least one tag where they
+// differ in length is not pinned.
+extends := func(long, short, pinned) {
+	if long.sampleId == short.sampleId {
+		return false
+	}
+	open := false
+	for i, v in short.values {
+		if !text.has_prefix(long.values[i], v) {
+			return false
+		}
+		if len(long.values[i]) != len(v) && !pinned[i] {
+			open = true
+		}
+	}
+	return open
+}
+
+// Sample pairs a read can match both of: a read from `shorter` whose bases after the
+// barcode spell the rest of `longer`'s barcode goes to `longer`. Pairs follow the
+// order of `rows`.
+prefixOverlaps := func(rows, pinned) {
+	out := []
+	for long in rows {
+		for short in rows {
+			if extends(long, short, pinned) {
+				out = append(out, {
+					longer: { sampleId: long.sampleId, barcodes: long.values },
+					shorter: { sampleId: short.sampleId, barcodes: short.values }
+				})
+			}
+		}
+	}
+	return out
+}
+
+export {
+	orderRows: orderRows,
+	pinnedTags: pinnedTags,
+	prefixOverlaps: prefixOverlaps
+}

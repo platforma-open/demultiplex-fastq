@@ -70,6 +70,16 @@ export type InputOptions = {
   factsByRef: Record<string, InputFacts>;
 };
 
+export type OverlapSide = { sampleId: string; barcodes: string[] };
+
+// Pairs of samples in one sampleGroup where every barcode of `shorter` is a
+// prefix of the matching barcode of `longer`, and the tag pattern leaves the
+// bases after at least one shorter barcode open. `barcodes` follow `tags` order.
+export type BarcodeOverlaps = {
+  tags: string[];
+  pairs: { sampleGroupId: string; longer: OverlapSide; shorter: OverlapSide }[];
+};
+
 const DRY_RUN_READS_DEFAULT = 100_000;
 const PER_PROCESS_MEM_GB_DEFAULT = 32;
 const PER_PROCESS_CPUS_DEFAULT = 8;
@@ -80,16 +90,17 @@ export const refKey = (ref: PlRef): string => `${ref.blockId}/${ref.name}`;
 
 const PLACEHOLDER_RE = /\{([A-Za-z0-9]+)\}/g;
 
-function parsePlaceholders(pattern: string): { used: string[]; duplicate?: string } {
-  const seen = new Set<string>();
+// A tag may appear once per mate: on both mates it means "the same barcode on R1 and R2".
+export function parsePlaceholders(pattern: string): { used: string[]; duplicate?: string } {
   const ordered: string[] = [];
-  let m: RegExpExecArray | null;
-  PLACEHOLDER_RE.lastIndex = 0;
-  while ((m = PLACEHOLDER_RE.exec(pattern)) !== null) {
-    const name = m[1];
-    if (seen.has(name)) return { used: ordered, duplicate: name };
-    seen.add(name);
-    ordered.push(name);
+  for (const side of pattern.split("\\")) {
+    const seenOnSide = new Set<string>();
+    for (const m of side.matchAll(PLACEHOLDER_RE)) {
+      const name = m[1];
+      if (seenOnSide.has(name)) return { used: ordered, duplicate: name };
+      seenOnSide.add(name);
+      if (!ordered.includes(name)) ordered.push(name);
+    }
   }
   return { used: ordered };
 }
@@ -159,7 +170,7 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
 
     const { used, duplicate } = parsePlaceholders(tagPattern);
     if (duplicate) {
-      throw new Error(`Tag placeholder {${duplicate}} appears more than once in the pattern`);
+      throw new Error(`Tag placeholder {${duplicate}} appears more than once on the same read`);
     }
     if (used.length === 0) {
       throw new Error("Tag pattern must reference at least one barcode tag, e.g. {P5}");
@@ -265,6 +276,12 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     ctx.outputs
       ?.resolve({ field: "qcGroupSummary", allowPermanentAbsence: true })
       ?.getDataAsJson<Record<string, { total: number; matched: number }>>(),
+  )
+
+  .output("barcodeOverlaps", (ctx) =>
+    ctx.outputs
+      ?.resolve({ field: "barcodeOverlaps", allowPermanentAbsence: true })
+      ?.getDataAsJson<BarcodeOverlaps>(),
   )
 
   .output("sampleGroupLabels", (ctx) => {

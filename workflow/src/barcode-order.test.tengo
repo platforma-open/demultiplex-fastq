@@ -1,0 +1,98 @@
+test := import("@platforma-sdk/workflow-tengo:test")
+text := import("text")
+barcodeOrder := import(":barcode-order")
+
+_row := func(sampleId, values) {
+	return { sampleId: sampleId, values: values, tupleKey: text.join(values, "_") }
+}
+
+// No tag is followed by a fixed base in the pattern.
+_open := [false, false]
+
+_sampleIds := func(rows) {
+	out := []
+	for r in rows {
+		out = append(out, r.sampleId)
+	}
+	return out
+}
+
+Test_orderRows_putsLongerBarcodeBeforeItsPrefix := func() {
+	rows := [_row("short", ["ACGTACG"]), _row("long", ["ACGTACGTTG"])]
+	test.isEqual(["long", "short"], _sampleIds(barcodeOrder.orderRows(rows)),
+		"10-nt barcode precedes the 7-nt barcode it extends")
+}
+
+Test_orderRows_isIndependentOfInputOrder := func() {
+	a := [_row("s7", ["AACTGAC"]), _row("s10", ["AAGGTCTCGT"]), _row("s8", ["ACGGAGTG"]), _row("s7b", ["ACCTTCG"])]
+	b := [a[3], a[1], a[0], a[2]]
+	test.isEqual(_sampleIds(barcodeOrder.orderRows(a)), _sampleIds(barcodeOrder.orderRows(b)),
+		"same rows in any order give the same sequence")
+	test.isEqual(["s10", "s8", "s7", "s7b"], _sampleIds(barcodeOrder.orderRows(a)),
+		"length descending, then tupleKey ascending")
+}
+
+Test_orderRows_usesTotalLengthAcrossTags := func() {
+	rows := [_row("short", ["ACGT", "GGCC"]), _row("long", ["ACGT", "GGCCAA"])]
+	test.isEqual(["long", "short"], _sampleIds(barcodeOrder.orderRows(rows)),
+		"two-tag row that extends the other on one tag comes first")
+}
+
+Test_prefixOverlaps_reportsExactPrefix := func() {
+	rows := [_row("short", ["ACGTACG"]), _row("long", ["ACGTACGTTG"]), _row("other", ["TTTTTTT"])]
+	test.isEqual([{
+		longer: { sampleId: "long", barcodes: ["ACGTACGTTG"] },
+		shorter: { sampleId: "short", barcodes: ["ACGTACG"] }
+	}], barcodeOrder.prefixOverlaps(rows, _open), "one pair, longer first")
+}
+
+Test_prefixOverlaps_needsEveryTagToBePrefixed := func() {
+	rows := [_row("a", ["ACGT", "GGCC"]), _row("b", ["ACGTAA", "TTCC"])]
+	test.isEqual([], barcodeOrder.prefixOverlaps(rows, _open), "second tag differs, no overlap")
+}
+
+Test_prefixOverlaps_ignoresSameSampleAlternatives := func() {
+	rows := [_row("s1", ["ACGT"]), _row("s1", ["ACGTAA"])]
+	test.isEqual([], barcodeOrder.prefixOverlaps(rows, _open), "both rows route to the same sample")
+}
+
+Test_prefixOverlaps_emptyForEqualLengthBarcodes := func() {
+	rows := [_row("a", ["ACGTACGT"]), _row("b", ["ACGTACGA"]), _row("c", ["TTGCAACC"])]
+	test.isEqual([], barcodeOrder.prefixOverlaps(rows, _open), "fixed-length set never overlaps")
+}
+
+Test_prefixOverlaps_skipsPairPinnedByFixedSequence := func() {
+	rows := [_row("short", ["ACGTACG"]), _row("long", ["ACGTACGTTG"])]
+	test.isEqual([], barcodeOrder.prefixOverlaps(rows, [true]),
+		"a fixed base after the barcode keeps the samples apart")
+}
+
+Test_prefixOverlaps_needsEveryDifferingTagPinned := func() {
+	rows := [_row("short", ["ACGT", "GGCC"]), _row("long", ["ACGTAA", "GGCCTT"])]
+	test.isEqual(1, len(barcodeOrder.prefixOverlaps(rows, [true, false])),
+		"the second tag still leaves the bases after it open")
+	test.isEqual([], barcodeOrder.prefixOverlaps(rows, [true, true]), "both tags pinned")
+}
+
+Test_prefixOverlaps_ignoresPinOnEqualLengthTag := func() {
+	rows := [_row("short", ["ACGT", "GGCC"]), _row("long", ["ACGT", "GGCCTT"])]
+	test.isEqual(1, len(barcodeOrder.prefixOverlaps(rows, [true, false])),
+		"pinning a tag that is equal in both rows does not separate them")
+}
+
+Test_pinnedTags_needsLiteralBaseRightAfterPlaceholder := func() {
+	test.isEqual([true, false, false],
+		barcodeOrder.pinnedTags("^{S1}GGGAAA{S2}N{2}(R1:*)\\^{S3}(R2:*)", ["S1", "S2", "S3"]),
+		"S1 is followed by G; S2 by N; S3 by a capture")
+}
+
+Test_pinnedTags_anyOccurrencePins := func() {
+	test.isEqual([true], barcodeOrder.pinnedTags("^{S1}(R1:*)\\^{S1}TTT(R2:*)", ["S1"]),
+		"pinned on R2 is enough")
+}
+
+Test_pinnedTags_doesNotConfuseS1WithS10 := func() {
+	names := ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10"]
+	test.isEqual(false, barcodeOrder.pinnedTags("^{S1}{S10}A(R1:*)", names)[0], "{S10}A does not pin S1")
+	test.isEqual(true, barcodeOrder.pinnedTags("^{S1}{S10}A(R1:*)", names)[9], "{S10}A pins S10")
+}
