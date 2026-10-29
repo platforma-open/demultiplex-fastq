@@ -6,9 +6,9 @@
 //   - tupleToSampleByGroup: ResourceMap[groupId] -> std/json { <tupleKey>: <sampleId> }
 //
 // For each group, decodes `parseReport.perSampleMatched` from the JSON report,
-// joins each entry's `sampleKey` array with `_` to get the tuple key, looks up
-// the matching sampleId via that group's tupleToSample, and accumulates into
-// a single flat map `[groupId, sampleId] -> matched`.
+// resolves each entry to a sampleId via that group's tupleToSample, and sums the
+// matched counts into a single flat map `[groupId, sampleId] -> matched`
+// (see qc-accumulate.lib.tengo: a sample may hold several barcodes in a group).
 //
 // Emits PColumnData/Json with keyLength 2 — axes are [sampleGroupId, sampleId]
 // per qcSpec in demux-process.
@@ -18,8 +18,8 @@ ll := import("@platforma-sdk/workflow-tengo:ll")
 smart := import("@platforma-sdk/workflow-tengo:smart")
 maps := import("@platforma-sdk/workflow-tengo:maps")
 pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
+qcAccumulate := import(":qc-accumulate")
 json := import("json")
-text := import("text")
 
 self.defineOutputs("qcData", "qcGroupSummary")
 
@@ -96,24 +96,7 @@ self.body(func(inputs) {
 			continue
 		}
 
-		for entry in perSample {
-			ll.assert(is_map(entry) && is_array(entry.sampleKey),
-				"group %s perSampleMatched entry malformed: %v", groupKey, entry)
-			ll.assert(len(entry.sampleKey) >= 1,
-				"group %s perSampleMatched entry has empty sampleKey", groupKey)
-			tupleParts := []
-			for v in entry.sampleKey {
-				tupleParts = append(tupleParts, string(v))
-			}
-			tupleKey := text.join(tupleParts, "_")
-			sampleId := t2s[tupleKey]
-			if is_undefined(sampleId) {
-				// Captured tuple not in our expected set (e.g. wildcard capture).
-				// Drop silently — matches export-by-sample's behaviour.
-				continue
-			}
-			flat[json.encode([sampleGroupId, sampleId])] = entry.matched
-		}
+		flat = qcAccumulate.addPerSampleMatched(flat, sampleGroupId, perSample, t2s)
 	}
 
 	payload := {
