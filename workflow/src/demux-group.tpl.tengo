@@ -4,7 +4,8 @@
 // never sees user tag names.
 //
 // Inputs from `extra`:
-//   perGroupRows[groupId]: [{ sampleId, values: [v_S1, v_S2, ...], tupleKey }]
+//   perGroupRows[groupId]: [{ sampleId, values: [v_S1, v_S2, ...], tupleKey }],
+//                          in barcode-order.orderRows order (the alternative order)
 //   canonicalNames:        ["S1", "S2", ...]   — S-index order
 //   canonicalPattern:      tagPattern with `{S<i>}` placeholders
 //   isPaired:              bool — global paired-end status (one FASTQ dataset)
@@ -29,7 +30,6 @@ pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
 pcolumn := import("@platforma-sdk/workflow-tengo:pframes.pcolumn")
 json := import("json")
 text := import("text")
-barcodeOrder := import(":barcode-order")
 tagPattern := import(":tag-pattern")
 
 self.defineOutputs("mics", "tupleToSample", "mitoolLog", "reports", "reportJsonContent")
@@ -67,9 +67,6 @@ self.body(func(inputs) {
 			reportJsonContent: smart.createNullResource()
 		}
 	}
-
-	// Alternative order decides which sample wins when one barcode prefixes another.
-	rows = barcodeOrder.orderRows(rows)
 
 	tupleToSample := {}
 	for r in rows {

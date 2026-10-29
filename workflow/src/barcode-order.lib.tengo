@@ -26,30 +26,49 @@ orderRows := func(rows) {
 	})
 }
 
-// True when `long` and `short` belong to different samples and every value of
-// `short` is a prefix of the matching value of `long`.
-extends := func(long, short) {
-	if long.sampleId == short.sampleId || long.tupleKey == short.tupleKey {
+// pinnedTags marks each canonical name whose placeholder is directly followed by a
+// literal base somewhere in the pattern.
+pinnedTags := func(canonicalPattern, canonicalNames) {
+	out := []
+	for name in canonicalNames {
+		pinned := false
+		for base in ["A", "C", "G", "T"] {
+			if text.contains(canonicalPattern, "{" + name + "}" + base) {
+				pinned = true
+			}
+		}
+		out = append(out, pinned)
+	}
+	return out
+}
+
+// True when `long` and `short` belong to different samples, every value of `short`
+// is a prefix of the matching value of `long`, and at least one tag where they
+// differ in length is not pinned.
+extends := func(long, short, pinned) {
+	if long.sampleId == short.sampleId {
 		return false
 	}
+	open := false
 	for i, v in short.values {
 		if !text.has_prefix(long.values[i], v) {
 			return false
 		}
+		if len(long.values[i]) != len(v) && !pinned[i] {
+			open = true
+		}
 	}
-	return true
+	return open
 }
 
-// Sample pairs whose barcodes overlap at the start: a read carrying `longer`
-// followed by sequence matching the rest also matches `shorter` exactly.
-// Ordered by orderRows over `longer`, then over `shorter`.
-prefixOverlaps := func(rows) {
-	ordered := orderRows(rows)
+// Sample pairs a read can match both of: a read from `shorter` whose bases after the
+// barcode spell the rest of `longer`'s barcode goes to `longer`. Pairs follow the
+// order of `rows`.
+prefixOverlaps := func(rows, pinned) {
 	out := []
-	for i, long in ordered {
-		for j := i + 1; j < len(ordered); j++ {
-			short := ordered[j]
-			if extends(long, short) {
+	for long in rows {
+		for short in rows {
+			if extends(long, short, pinned) {
 				out = append(out, {
 					longer: { sampleId: long.sampleId, barcodes: long.values },
 					shorter: { sampleId: short.sampleId, barcodes: short.values }
@@ -62,5 +81,6 @@ prefixOverlaps := func(rows) {
 
 export {
 	orderRows: orderRows,
+	pinnedTags: pinnedTags,
 	prefixOverlaps: prefixOverlaps
 }

@@ -231,11 +231,16 @@ self.body(func(inputs) {
 	ll.assert(len(perGroupRows) > 0,
 		"every multiplexing rule cell was empty or missing usedTags — nothing to demultiplex")
 
-	// A read carrying the longer barcode, or the shorter one followed by the
-	// longer one's remaining bases, matches both; mitool assigns it to the longer.
+	// Row order is mitool's alternative order in demux-group, which decides the sample
+	// when one barcode prefixes another.
+	for groupId in maps.getKeys(perGroupRows) {
+		perGroupRows[groupId] = barcodeOrder.orderRows(perGroupRows[groupId])
+	}
+
+	pinned := barcodeOrder.pinnedTags(canonicalPattern, canonicalNames)
 	overlapPairs := []
 	for groupId in maps.getKeys(perGroupRows) {
-		for pair in barcodeOrder.prefixOverlaps(perGroupRows[groupId]) {
+		for pair in barcodeOrder.prefixOverlaps(perGroupRows[groupId], pinned) {
 			overlapPairs = append(overlapPairs, {
 				sampleGroupId: groupId,
 				longer: pair.longer,
