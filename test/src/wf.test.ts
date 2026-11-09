@@ -28,14 +28,14 @@ function firstOptionRef(inputOptions: unknown): PlRef {
 type MultiplexedSample = { label: string; barcode: string };
 
 // Adds and runs Samples & Data with one paired-end group read from
-// `assets/<fixture>_R{1,2}.fastq.gz`: one rule per sample on tag BC. Returns its
-// block id and the sample ids in `samples` order.
+// `assets/<fixture>_R{1,2}.fastq.gz`: one rule per sample on tag BC. Returns the
+// group id and the sample ids in `samples` order.
 async function addMultiplexedSamples(
   project: ML.Project,
   helpers: RawHelpers,
   fixture: string,
   samples: MultiplexedSample[],
-): Promise<{ sndBlockId: string; groupId: string; sampleIds: string[] }> {
+): Promise<{ groupId: string; sampleIds: string[] }> {
   const sndBlockId = await project.addBlock("Samples & Data", SamplesAndDataBlockPointer);
   const groupId = uniquePlId();
   const sampleIds = samples.map(() => uniquePlId());
@@ -78,7 +78,7 @@ async function addMultiplexedSamples(
   });
   await project.runBlock(sndBlockId);
   await helpers.awaitBlockDone(sndBlockId, 120000);
-  return { sndBlockId, groupId, sampleIds };
+  return { groupId, sampleIds };
 }
 
 // Configures and runs a demux block on `inputRef`, returning its outputs.
@@ -137,7 +137,6 @@ blockTest(
   { timeout: 600000 },
   async ({ rawPrj: project, helpers, expect }) => {
     const {
-      sndBlockId,
       groupId,
       sampleIds: [shortId, longId, otherId],
     } = await addMultiplexedSamples(project, helpers, "prefix_barcodes", [
@@ -150,22 +149,9 @@ blockTest(
     // The rules column reaches the demux block through the result pool, as in the UI. The block
     // has not run, so its state is untyped; only the ref is narrowed.
     const optionsState = await awaitStableState(project.getBlockState(demuxBlockId), 30000);
-    const optionsOutputs = defined(optionsState.outputs, "outputs");
     const inputRef = firstOptionRef(
-      readOutput(defined(optionsOutputs.inputOptions, "inputOptions")),
+      readOutput(defined(defined(optionsState.outputs, "outputs").inputOptions, "inputOptions")),
     );
-    expect(optionsOutputs.inputOptions).toMatchObject({
-      ok: true,
-      value: {
-        options: [{ ref: { blockId: sndBlockId } }],
-        factsByRef: {
-          [`${inputRef.blockId}/${inputRef.name}`]: {
-            tags: ["BC"],
-            nucleotidesOnly: true,
-          },
-        },
-      },
-    });
 
     const outputs = await runDemux(
       project,

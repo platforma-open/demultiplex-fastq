@@ -7,7 +7,11 @@ _row := func(sampleId, values) {
 }
 
 // No tag is followed by a fixed base in the pattern.
-_open := [false, false]
+_open := [{}, {}]
+
+_overlaps := func(rows, pins) {
+	return barcodeOrder.prefixOverlaps("g1", rows, pins)
+}
 
 _sampleIds := func(rows) {
 	out := []
@@ -41,58 +45,73 @@ Test_orderRows_usesTotalLengthAcrossTags := func() {
 Test_prefixOverlaps_reportsExactPrefix := func() {
 	rows := [_row("short", ["ACGTACG"]), _row("long", ["ACGTACGTTG"]), _row("other", ["TTTTTTT"])]
 	test.isEqual([{
+		sampleGroupId: "g1",
 		longer: { sampleId: "long", barcodes: ["ACGTACGTTG"] },
 		shorter: { sampleId: "short", barcodes: ["ACGTACG"] }
-	}], barcodeOrder.prefixOverlaps(rows, _open), "one pair, longer first")
+	}], _overlaps(rows, _open), "one pair, longer first")
 }
 
 Test_prefixOverlaps_needsEveryTagToBePrefixed := func() {
 	rows := [_row("a", ["ACGT", "GGCC"]), _row("b", ["ACGTAA", "TTCC"])]
-	test.isEqual([], barcodeOrder.prefixOverlaps(rows, _open), "second tag differs, no overlap")
+	test.isEqual([], _overlaps(rows, _open), "second tag differs, no overlap")
 }
 
 Test_prefixOverlaps_ignoresSameSampleAlternatives := func() {
 	rows := [_row("s1", ["ACGT"]), _row("s1", ["ACGTAA"])]
-	test.isEqual([], barcodeOrder.prefixOverlaps(rows, _open), "both rows route to the same sample")
+	test.isEqual([], _overlaps(rows, _open), "both rows route to the same sample")
 }
 
 Test_prefixOverlaps_emptyForEqualLengthBarcodes := func() {
 	rows := [_row("a", ["ACGTACGT"]), _row("b", ["ACGTACGA"]), _row("c", ["TTGCAACC"])]
-	test.isEqual([], barcodeOrder.prefixOverlaps(rows, _open), "fixed-length set never overlaps")
+	test.isEqual([], _overlaps(rows, _open), "fixed-length set never overlaps")
 }
 
-Test_prefixOverlaps_skipsPairPinnedByFixedSequence := func() {
+Test_prefixOverlaps_skipsPairPinnedByDifferentBase := func() {
 	rows := [_row("short", ["ACGTACG"]), _row("long", ["ACGTACGTTG"])]
-	test.isEqual([], barcodeOrder.prefixOverlaps(rows, [true]),
-		"a fixed base after the barcode keeps the samples apart")
+	test.isEqual([], _overlaps(rows, [{ G: true }]),
+		"a fixed G after the barcode, where the longer barcode has T, keeps the samples apart")
 }
 
-Test_prefixOverlaps_needsEveryDifferingTagPinned := func() {
+Test_prefixOverlaps_keepsPairWhenPinMatchesLongerBarcode := func() {
+	rows := [_row("short", ["ACGTACG"]), _row("long", ["ACGTACGTTG"])]
+	test.isEqual(1, len(_overlaps(rows, [{ T: true }])),
+		"a fixed T after the barcode is what the longer barcode has there too")
+}
+
+Test_prefixOverlaps_anyDifferingPinBaseSeparates := func() {
+	rows := [_row("short", ["ACGTACG"]), _row("long", ["ACGTACGTTG"])]
+	test.isEqual([], _overlaps(rows, [{ T: true, G: true }]),
+		"the occurrence followed by G separates them, even if another is followed by T")
+}
+
+Test_prefixOverlaps_onePinnedDifferingTagSeparates := func() {
 	rows := [_row("short", ["ACGT", "GGCC"]), _row("long", ["ACGTAA", "GGCCTT"])]
-	test.isEqual(1, len(barcodeOrder.prefixOverlaps(rows, [true, false])),
-		"the second tag still leaves the bases after it open")
-	test.isEqual([], barcodeOrder.prefixOverlaps(rows, [true, true]), "both tags pinned")
+	test.isEqual([], _overlaps(rows, [{ G: true }, {}]),
+		"the longer row's alternative must match every tag, so one separating tag is enough")
+	test.isEqual(1, len(_overlaps(rows, [{ A: true }, {}])),
+		"a pin equal to the longer barcode's next base does not separate")
 }
 
 Test_prefixOverlaps_ignoresPinOnEqualLengthTag := func() {
 	rows := [_row("short", ["ACGT", "GGCC"]), _row("long", ["ACGT", "GGCCTT"])]
-	test.isEqual(1, len(barcodeOrder.prefixOverlaps(rows, [true, false])),
+	test.isEqual(1, len(_overlaps(rows, [{ G: true }, {}])),
 		"pinning a tag that is equal in both rows does not separate them")
 }
 
-Test_pinnedTags_needsLiteralBaseRightAfterPlaceholder := func() {
-	test.isEqual([true, false, false],
-		barcodeOrder.pinnedTags("^{S1}GGGAAA{S2}N{2}(R1:*)\\^{S3}(R2:*)", ["S1", "S2", "S3"]),
+Test_pinBases_needsLiteralBaseRightAfterPlaceholder := func() {
+	test.isEqual([{ G: true }, {}, {}],
+		barcodeOrder.pinBases("^{S1}GGGAAA{S2}N{2}(R1:*)\\^{S3}(R2:*)", ["S1", "S2", "S3"]),
 		"S1 is followed by G; S2 by N; S3 by a capture")
 }
 
-Test_pinnedTags_anyOccurrencePins := func() {
-	test.isEqual([true], barcodeOrder.pinnedTags("^{S1}(R1:*)\\^{S1}TTT(R2:*)", ["S1"]),
-		"pinned on R2 is enough")
+Test_pinBases_collectsEveryOccurrence := func() {
+	test.isEqual([{ A: true, T: true }], barcodeOrder.pinBases("^{S1}A(R1:*)\\^{S1}TTT(R2:*)", ["S1"]),
+		"bases after the placeholder on R1 and on R2")
 }
 
-Test_pinnedTags_doesNotConfuseS1WithS10 := func() {
+Test_pinBases_doesNotConfuseS1WithS10 := func() {
 	names := ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10"]
-	test.isEqual(false, barcodeOrder.pinnedTags("^{S1}{S10}A(R1:*)", names)[0], "{S10}A does not pin S1")
-	test.isEqual(true, barcodeOrder.pinnedTags("^{S1}{S10}A(R1:*)", names)[9], "{S10}A pins S10")
+	pins := barcodeOrder.pinBases("^{S1}{S10}A(R1:*)", names)
+	test.isEqual({}, pins[0], "{S10}A does not pin S1")
+	test.isEqual({ A: true }, pins[9], "{S10}A pins S10")
 }

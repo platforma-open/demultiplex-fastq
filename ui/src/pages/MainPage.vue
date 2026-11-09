@@ -195,7 +195,9 @@ const rows = computed<GroupRow[]>(() => {
   }));
 });
 
-// One line per sample pair whose barcodes overlap at the start.
+const MAX_OVERLAP_LINES = 20;
+
+// One line per sample pair whose barcodes overlap at the start, capped at MAX_OVERLAP_LINES.
 const barcodeOverlapLines = computed<string[]>(() => {
   const overlaps = app.model.outputs.barcodeOverlaps;
   if (!overlaps) return [];
@@ -205,10 +207,14 @@ const barcodeOverlapLines = computed<string[]>(() => {
     `${sampleLabels[s.sampleId] ?? s.sampleId} (${s.barcodes
       .map((b, i) => `${overlaps.tags[i]}=${b}`)
       .join(", ")})`;
-  return overlaps.pairs.map(
-    (p) =>
-      `${groupLabels[p.sampleGroupId] ?? p.sampleGroupId}: ${side(p.shorter)} is a prefix of ${side(p.longer)}`,
-  );
+  const lines = overlaps.pairs
+    .slice(0, MAX_OVERLAP_LINES)
+    .map(
+      (p) =>
+        `${groupLabels[p.sampleGroupId] ?? p.sampleGroupId}: ${side(p.shorter)} is a prefix of ${side(p.longer)}`,
+    );
+  const hidden = overlaps.pairs.length - lines.length;
+  return hidden > 0 ? [...lines, `…and ${hidden} more pairs`] : lines;
 });
 
 const loadingOverlayParams = computed(() => {

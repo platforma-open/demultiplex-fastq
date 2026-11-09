@@ -1,4 +1,5 @@
 ---
+'@platforma-open/milaboratories.demultiplex-fastq': minor
 '@platforma-open/milaboratories.demultiplex-fastq.workflow': minor
 '@platforma-open/milaboratories.demultiplex-fastq.model': minor
 '@platforma-open/milaboratories.demultiplex-fastq.ui': minor

@@ -1,4 +1,5 @@
 ---
+'@platforma-open/milaboratories.demultiplex-fastq': patch
 '@platforma-open/milaboratories.demultiplex-fastq.workflow': patch
 ---
 

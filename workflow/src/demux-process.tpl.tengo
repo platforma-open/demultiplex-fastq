@@ -233,20 +233,11 @@ self.body(func(inputs) {
 
 	// Row order is mitool's alternative order in demux-group, which decides the sample
 	// when one barcode prefixes another.
-	for groupId in maps.getKeys(perGroupRows) {
-		perGroupRows[groupId] = barcodeOrder.orderRows(perGroupRows[groupId])
-	}
-
-	pinned := barcodeOrder.pinnedTags(canonicalPattern, canonicalNames)
+	pins := barcodeOrder.pinBases(canonicalPattern, canonicalNames)
 	overlapPairs := []
 	for groupId in maps.getKeys(perGroupRows) {
-		for pair in barcodeOrder.prefixOverlaps(perGroupRows[groupId], pinned) {
-			overlapPairs = append(overlapPairs, {
-				sampleGroupId: groupId,
-				longer: pair.longer,
-				shorter: pair.shorter
-			})
-		}
+		perGroupRows[groupId] = barcodeOrder.orderRows(perGroupRows[groupId])
+		overlapPairs += barcodeOrder.prefixOverlaps(groupId, perGroupRows[groupId], pins)
 	}
 	barcodeOverlaps := smart.createJsonResource({ tags: usedTags, pairs: overlapPairs })
 

@@ -73,8 +73,9 @@ export type InputOptions = {
 export type OverlapSide = { sampleId: string; barcodes: string[] };
 
 // Pairs of samples in one sampleGroup where every barcode of `shorter` is a
-// prefix of the matching barcode of `longer`, and the tag pattern leaves the
-// bases after at least one shorter barcode open. `barcodes` follow `tags` order.
+// prefix of the matching barcode of `longer`, at least one is strictly shorter,
+// and no fixed base in the tag pattern right after a shorter barcode differs from
+// the longer barcode's base there. `barcodes` follow `tags` order.
 export type BarcodeOverlaps = {
   tags: string[];
   pairs: { sampleGroupId: string; longer: OverlapSide; shorter: OverlapSide }[];
