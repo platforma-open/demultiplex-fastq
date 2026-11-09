@@ -1,0 +1,88 @@
+// Ordering and overlap checks over one sampleGroup's barcode rows.
+// A row is { sampleId, values: [v_S1, v_S2, ...], tupleKey }.
+
+slices := import("@platforma-sdk/workflow-tengo:slices")
+text := import("text")
+
+// mitool ranks `||` alternatives by mismatch cost alone and keeps the first on a
+// tie, so a barcode listed before a longer barcode it prefixes takes that
+// barcode's reads. Longest tuple first; tupleKey keeps the order deterministic.
+// tupleKey is the values joined by "_", so its length orders rows by total length.
+orderRows := func(rows) {
+	return slices.quickSortFn(rows, func(a, b) {
+		if len(a.tupleKey) != len(b.tupleKey) {
+			return len(a.tupleKey) > len(b.tupleKey)
+		}
+		return a.tupleKey < b.tupleKey
+	})
+}
+
+// pinBases returns, per canonical name, the set of literal bases that directly
+// follow its placeholder anywhere in the pattern.
+pinBases := func(canonicalPattern, canonicalNames) {
+	out := []
+	for name in canonicalNames {
+		bases := {}
+		matches := text.re_find("\\{" + name + "\\}([ACGT])", canonicalPattern, -1)
+		if !is_undefined(matches) {
+			for m in matches {
+				bases[m[1].text] = true
+			}
+		}
+		out = append(out, bases)
+	}
+	return out
+}
+
+// True when `long` and `short` belong to different samples, every value of `short`
+// is a prefix of the matching value of `long`, at least one is strictly shorter, and
+// no tag separates them. A tag separates them when a pinned base after the shorter
+// value differs from the base the longer value has there: each sample's alternative
+// then fails on the other sample's reads.
+extends := func(long, short, pins) {
+	if long.sampleId == short.sampleId {
+		return false
+	}
+	longer := false
+	for i, v in short.values {
+		lv := long.values[i]
+		if !text.has_prefix(lv, v) {
+			return false
+		}
+		if len(lv) > len(v) {
+			next := lv[len(v):len(v) + 1]
+			for base, _ in pins[i] {
+				if base != next {
+					return false
+				}
+			}
+			longer = true
+		}
+	}
+	return longer
+}
+
+// Sample pairs a read can match both of: a read from `shorter` whose bases after the
+// barcode spell the rest of `longer`'s barcode goes to `longer`. Pairs follow the
+// order of `rows`.
+prefixOverlaps := func(sampleGroupId, rows, pins) {
+	out := []
+	for long in rows {
+		for short in rows {
+			if extends(long, short, pins) {
+				out = append(out, {
+					sampleGroupId: sampleGroupId,
+					longer: { sampleId: long.sampleId, barcodes: long.values },
+					shorter: { sampleId: short.sampleId, barcodes: short.values }
+				})
+			}
+		}
+	}
+	return out
+}
+
+export {
+	orderRows: orderRows,
+	pinBases: pinBases,
+	prefixOverlaps: prefixOverlaps
+}

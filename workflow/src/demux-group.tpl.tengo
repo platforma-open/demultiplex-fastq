@@ -4,7 +4,8 @@
 // never sees user tag names.
 //
 // Inputs from `extra`:
-//   perGroupRows[groupId]: [{ sampleId, values: [v_S1, v_S2, ...], tupleKey }]
+//   perGroupRows[groupId]: [{ sampleId, values: [v_S1, v_S2, ...], tupleKey }],
+//                          in barcode-order.orderRows order (the alternative order)
 //   canonicalNames:        ["S1", "S2", ...]   — S-index order
 //   canonicalPattern:      tagPattern with `{S<i>}` placeholders
 //   isPaired:              bool — global paired-end status (one FASTQ dataset)
@@ -27,9 +28,9 @@ exec := import("@platforma-sdk/workflow-tengo:exec")
 assets := import("@platforma-sdk/workflow-tengo:assets")
 pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
 pcolumn := import("@platforma-sdk/workflow-tengo:pframes.pcolumn")
-slices := import("@platforma-sdk/workflow-tengo:slices")
 json := import("json")
 text := import("text")
+tagPattern := import(":tag-pattern")
 
 self.defineOutputs("mics", "tupleToSample", "mitoolLog", "reports", "reportJsonContent")
 
@@ -67,11 +68,6 @@ self.body(func(inputs) {
 		}
 	}
 
-	// Deterministic branch order for cache-key stability — sort rows by tupleKey.
-	rows = slices.quickSortFn(rows, func(a, b) {
-		return a.tupleKey < b.tupleKey
-	})
-
 	tupleToSample := {}
 	for r in rows {
 		tupleToSample[r.tupleKey] = r.sampleId
@@ -98,9 +94,10 @@ self.body(func(inputs) {
 	//   `\` separates R1 and R2 sides (binds tightest)
 	//   `|` alternative within one side
 	//   `||` alternative across the whole read pair (binds loosest)
-	// Per-row branches contain row-specific captures on BOTH sides — substitute
-	// `{S<i>}` → `(S<i>:<value>)` on R1 AND R2 in lockstep, then join the
-	// per-row R1\R2 pairs with `||` so mitool sees full read-pair alternatives.
+	// Per-row branches substitute each row's barcodes on BOTH sides in lockstep
+	// (tag-pattern.lib), then join the per-row R1\R2 pairs with `||` so mitool
+	// sees full read-pair alternatives. A tag on both mates is captured on R1
+	// and matched as plain sequence on R2.
 	// canonicalPattern is whitespace-stripped already (model side).
 	backslash := "\\"
 	parts := text.split(canonicalPattern, backslash)
@@ -115,23 +112,12 @@ self.body(func(inputs) {
 		r2UserPart = "^(R2:*)"
 	}
 
-	substituteRow := func(side, row) {
-		out := side
-		for i, name in canonicalNames {
-			capture := "(" + name + ":" + row.values[i] + ")"
-			out = text.replace(out, "{" + name + "}", capture, -1)
-		}
-		return out
-	}
-
 	variants := []
 	for r in rows {
-		r1Branch := substituteRow(r1UserPart, r)
 		if isPaired {
-			r2Branch := substituteRow(r2UserPart, r)
-			variants = append(variants, r1Branch + backslash + r2Branch)
+			variants = append(variants, tagPattern.expandPair(r1UserPart, r2UserPart, canonicalNames, r.values))
 		} else {
-			variants = append(variants, r1Branch)
+			variants = append(variants, tagPattern.expandSingle(r1UserPart, canonicalNames, r.values))
 		}
 	}
 	// Cross-pair alternative `||` for paired (each variant is a full R1\R2
@@ -159,6 +145,7 @@ self.body(func(inputs) {
 	}
 
 	parse := exec.builder().
+		name("demux-parse").
 		printErrStreamToStdout().
 		env("MI_PROGRESS_PREFIX", progressPrefix).
 		software(mitoolSw).

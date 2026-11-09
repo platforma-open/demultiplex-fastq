@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { InputFacts } from "@platforma-open/milaboratories.demultiplex-fastq.model";
-import { refKey } from "@platforma-open/milaboratories.demultiplex-fastq.model";
+import { parsePlaceholders, refKey } from "@platforma-open/milaboratories.demultiplex-fastq.model";
 import type { PlRef } from "@platforma-sdk/model";
 import type { ListOption } from "@platforma-sdk/ui-vue";
 import {
@@ -44,21 +44,6 @@ function onInputRefUpdate(ref: PlRef | undefined) {
   app.model.data.inputNucleotidesOnly = facts?.nucleotidesOnly ?? false;
 }
 
-const PLACEHOLDER_RE = /\{([A-Za-z0-9]+)\}/g;
-function parsePlaceholders(pattern: string): { used: string[]; duplicate?: string } {
-  const seen = new Set<string>();
-  const ordered: string[] = [];
-  let m: RegExpExecArray | null;
-  PLACEHOLDER_RE.lastIndex = 0;
-  while ((m = PLACEHOLDER_RE.exec(pattern)) !== null) {
-    const name = m[1];
-    if (seen.has(name)) return { used: ordered, duplicate: name };
-    seen.add(name);
-    ordered.push(name);
-  }
-  return { used: ordered };
-}
-
 // Non-nucleotide barcodes are a property of the dataset, not the pattern —
 // flag on the input dropdown directly so the user sees the issue at the
 // source field. Args still throws for the same condition; UI is the
@@ -79,7 +64,7 @@ const tagPatternError = computed<string | undefined>(() => {
   const pattern = (app.model.data.tagPattern ?? "").replace(/\s+/g, "");
   if (!pattern) return undefined;
   const { used, duplicate } = parsePlaceholders(pattern);
-  if (duplicate) return `Tag {${duplicate}} appears more than once.`;
+  if (duplicate) return `Tag {${duplicate}} appears more than once on the same read.`;
   if (used.length === 0) return "Pattern must reference at least one barcode tag, e.g. {P5}.";
   const declared = new Set(declaredTags.value);
   const unknown = used.filter((t) => !declared.has(t));
@@ -141,6 +126,8 @@ function seedDefault() {
         <li>
           <code>{TagName}</code> — placeholder for one of the dataset's declared barcode tags. Each
           placeholder is filled with the per-sample barcode value from the multiplexing rules.
+          Putting the same tag on both reads (<code>^{BC}(R1:*)\^{BC}(R2:*)</code>) keeps only read
+          pairs that carry that sample's barcode on both mates.
         </li>
         <li>
           <code>N{n:m}</code> — run of <em>n</em> to <em>m</em> arbitrary bases (use
