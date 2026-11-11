@@ -2,7 +2,14 @@
   "$schema": "https://unpkg.com/@changesets/config@3.1.1/schema.json",
   "changelog": "@changesets/cli/changelog",
   "commit": false,
-  "fixed": [],
+  "fixed": [
+    [
+      "@platforma-open/milaboratories.demultiplex-fastq",
+      "@platforma-open/milaboratories.demultiplex-fastq.model",
+      "@platforma-open/milaboratories.demultiplex-fastq.ui",
+      "@platforma-open/milaboratories.demultiplex-fastq.workflow"
+    ]
+  ],
   "linked": [],
   "access": "restricted",
   "baseBranch": "main",
