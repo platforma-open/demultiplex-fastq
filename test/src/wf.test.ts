@@ -181,3 +181,47 @@ blockTest(
     });
   },
 );
+
+// Fixture `crossover_R{1,2}.fastq.gz`, paired-end, barcode at the start of BOTH mates:
+//   30 pairs GATCGTA / GATCGTA — sample "a"
+//   20 pairs CTAGCAT / CTAGCAT — sample "b"
+//   15 pairs GATCGTA / CTAGCAT and 5 pairs CTAGCAT / GATCGTA — PCR-crossover chimeras
+// One demux reads the barcode from R1 only, the other requires it on both mates.
+blockTest(
+  "same barcode tag on both mates drops crossover chimeras",
+  { timeout: 600000 },
+  async ({ rawPrj: project, helpers, expect }) => {
+    const {
+      sampleIds: [aId, bId],
+    } = await addMultiplexedSamples(project, helpers, "crossover", [
+      { label: "a", barcode: "GATCGTA" },
+      { label: "b", barcode: "CTAGCAT" },
+    ]);
+    const r1OnlyBlockId = await project.addBlock("FASTQ Demultiplexing", myBlockSpec);
+    const bothBlockId = await project.addBlock("FASTQ Demultiplexing", myBlockSpec);
+
+    const optionsState = await awaitStableState(project.getBlockState(bothBlockId), 30000);
+    const inputRef = firstOptionRef(
+      readOutput(defined(defined(optionsState.outputs, "outputs").inputOptions, "inputOptions")),
+    );
+
+    // R1 only: each chimera goes to its R1 barcode's sample.
+    const r1Only = await runDemux(
+      project,
+      helpers,
+      r1OnlyBlockId,
+      inputRef,
+      "^{BC}(R1:*)\\^(R2:*)",
+    );
+    expect(matchedBySample(r1Only)).toEqual({ [aId]: 45, [bId]: 25 });
+    // Both mates: only pairs with the sample's barcode on R1 and R2.
+    const both = await runDemux(
+      project,
+      helpers,
+      bothBlockId,
+      inputRef,
+      "^{BC}(R1:*)\\^{BC}(R2:*)",
+    );
+    expect(matchedBySample(both)).toEqual({ [aId]: 30, [bId]: 20 });
+  },
+);

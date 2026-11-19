@@ -1,0 +1,32 @@
+test := import("@platforma-sdk/workflow-tengo:test")
+tagPattern := import(":tag-pattern")
+
+Test_expandPair_capturesTagsOnR1 := func() {
+	test.isEqual("^(S1:ACCTTCG)(R1:*)\\^(R2:*)",
+		tagPattern.expandPair("^{S1}(R1:*)", "^(R2:*)", ["S1"], ["ACCTTCG"]),
+		"R1-only tag becomes a capture")
+}
+
+Test_expandPair_capturesTagsOnR2 := func() {
+	test.isEqual("^(R1:*)\\^(S1:ACCTTCG)(R2:*)",
+		tagPattern.expandPair("^(R1:*)", "^{S1}(R2:*)", ["S1"], ["ACCTTCG"]),
+		"R2-only tag becomes a capture")
+}
+
+Test_expandPair_repeatedTagIsLiteralOnR2 := func() {
+	test.isEqual("^(S1:ACCTTCG)(R1:*)\\^ACCTTCG(R2:*)",
+		tagPattern.expandPair("^{S1}(R1:*)", "^{S1}(R2:*)", ["S1"], ["ACCTTCG"]),
+		"tag on both mates: captured once on R1, matched as plain sequence on R2")
+}
+
+Test_expandPair_mixesRepeatedAndDistinctTags := func() {
+	test.isEqual("^(S1:AAAA)(S2:CCCC)(R1:*)\\^AAAA(R2:*)",
+		tagPattern.expandPair("^{S1}{S2}(R1:*)", "^{S1}(R2:*)", ["S1", "S2"], ["AAAA", "CCCC"]),
+		"only the tag present on R1 turns literal on R2")
+}
+
+Test_expandSingle_capturesTags := func() {
+	test.isEqual("^(S1:ACCTTCG)(R1:*)",
+		tagPattern.expandSingle("^{S1}(R1:*)", ["S1"], ["ACCTTCG"]),
+		"single-end pattern captures every tag")
+}
