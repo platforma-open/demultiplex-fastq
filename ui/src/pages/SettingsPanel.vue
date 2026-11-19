@@ -159,6 +159,12 @@ function seedDefault() {
         <code>^{P5}N{0:2}(R1:*)\^N{20}(R2:*)</code>. With dual-index:
         <code>^{P5}(R1:*)\^{P7}(R2:*)</code>.
       </p>
+      <p>
+        When a read can match the barcodes of two samples, the main page lists the pair. The check
+        assumes each barcode starts at a fixed position in the read. It does not cover a
+        variable-length run before a barcode, such as <code>^N{0:2}{P5}</code>, or two placeholders
+        side by side, such as <code>{P5}{P7}</code>.
+      </p>
     </template>
   </PlTextField>
 

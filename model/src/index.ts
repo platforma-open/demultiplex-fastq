@@ -70,6 +70,20 @@ export type InputOptions = {
   factsByRef: Record<string, InputFacts>;
 };
 
+export type OverlapSide = { sampleId: string; barcodes: string[] };
+
+// Pairs of samples in one sampleGroup that a read can match both of: on every tag
+// one barcode is a prefix of the other, and the fixed sequence the tag pattern
+// requires after the shorter barcode does not contradict the longer one. Such a
+// read goes to `to`, whose alternative mitool tries first. `barcodes` follow
+// `tags` order. Assumes each barcode starts at a fixed read position: overlaps
+// behind a variable-length run before a placeholder, or between adjacent
+// placeholders, are not listed.
+export type BarcodeOverlaps = {
+  tags: string[];
+  pairs: { sampleGroupId: string; from: OverlapSide; to: OverlapSide }[];
+};
+
 const DRY_RUN_READS_DEFAULT = 100_000;
 const PER_PROCESS_MEM_GB_DEFAULT = 32;
 const PER_PROCESS_CPUS_DEFAULT = 8;
@@ -265,6 +279,12 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     ctx.outputs
       ?.resolve({ field: "qcGroupSummary", allowPermanentAbsence: true })
       ?.getDataAsJson<Record<string, { total: number; matched: number }>>(),
+  )
+
+  .output("barcodeOverlaps", (ctx) =>
+    ctx.outputs
+      ?.resolve({ field: "barcodeOverlaps", allowPermanentAbsence: true })
+      ?.getDataAsJson<BarcodeOverlaps>(),
   )
 
   .output("sampleGroupLabels", (ctx) => {

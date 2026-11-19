@@ -4,7 +4,8 @@
 // never sees user tag names.
 //
 // Inputs from `extra`:
-//   perGroupRows[groupId]: [{ sampleId, values: [v_S1, v_S2, ...], tupleKey }]
+//   perGroupRows[groupId]: [{ sampleId, values: [v_S1, v_S2, ...], tupleKey }],
+//                          in barcode-order.orderRows order (the alternative order)
 //   canonicalNames:        ["S1", "S2", ...]   — S-index order
 //   canonicalPattern:      tagPattern with `{S<i>}` placeholders
 //   isPaired:              bool — global paired-end status (one FASTQ dataset)
@@ -27,7 +28,6 @@ exec := import("@platforma-sdk/workflow-tengo:exec")
 assets := import("@platforma-sdk/workflow-tengo:assets")
 pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
 pcolumn := import("@platforma-sdk/workflow-tengo:pframes.pcolumn")
-slices := import("@platforma-sdk/workflow-tengo:slices")
 json := import("json")
 text := import("text")
 
@@ -66,11 +66,6 @@ self.body(func(inputs) {
 			reportJsonContent: smart.createNullResource()
 		}
 	}
-
-	// Deterministic branch order for cache-key stability — sort rows by tupleKey.
-	rows = slices.quickSortFn(rows, func(a, b) {
-		return a.tupleKey < b.tupleKey
-	})
 
 	tupleToSample := {}
 	for r in rows {
