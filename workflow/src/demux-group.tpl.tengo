@@ -114,11 +114,8 @@ self.body(func(inputs) {
 
 	variants := []
 	for r in rows {
-		if isPaired {
-			variants = append(variants, tagPattern.expandPair(r1UserPart, r2UserPart, canonicalNames, r.values))
-		} else {
-			variants = append(variants, tagPattern.expandSingle(r1UserPart, canonicalNames, r.values))
-		}
+		// r2UserPart is "" for single-end input.
+		variants = append(variants, tagPattern.expand(r1UserPart, r2UserPart, canonicalNames, r.values))
 	}
 	// Cross-pair alternative `||` for paired (each variant is a full R1\R2
 	// pair). Within-side alternative `|` for single-end (variants live on R1

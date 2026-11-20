@@ -72,13 +72,8 @@ export type InputOptions = {
 
 export type OverlapSide = { sampleId: string; barcodes: string[] };
 
-// Pairs of samples in one sampleGroup that a read can match both of: on every tag
-// one barcode is a prefix of the other, and the fixed sequence the tag pattern
-// requires after the shorter barcode does not contradict the longer one. Such a
-// read goes to `to`, whose alternative mitool tries first. `barcodes` follow
-// `tags` order. Assumes each barcode starts at a fixed read position: overlaps
-// behind a variable-length run before a placeholder, or between adjacent
-// placeholders, are not listed.
+// Pairs of samples in one sampleGroup that a read can match both of. Such a read
+// goes to `to`. `barcodes` follow `tags` order.
 export type BarcodeOverlaps = {
   tags: string[];
   pairs: { sampleGroupId: string; from: OverlapSide; to: OverlapSide }[];

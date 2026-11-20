@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { AgGridVue } from "ag-grid-vue3";
 
+import type { OverlapSide } from "@platforma-open/milaboratories.demultiplex-fastq.model";
 import type { AnyLogHandle, LocalBlobHandle } from "@platforma-sdk/model";
 import type { PlAgHeaderComponentParams, PlChartStackedBarSettings } from "@platforma-sdk/ui-vue";
 import {
@@ -203,7 +204,7 @@ const barcodeOverlapLines = computed<string[]>(() => {
   if (!overlaps) return [];
   const sampleLabels = app.model.outputs.sampleLabels ?? {};
   const groupLabels = app.model.outputs.sampleGroupLabels ?? {};
-  const side = (s: { sampleId: string; barcodes: string[] }) =>
+  const side = (s: OverlapSide) =>
     `${sampleLabels[s.sampleId] ?? s.sampleId} (${s.barcodes
       .map((b, i) => `${overlaps.tags[i]}=${b}`)
       .join(", ")})`;
@@ -340,10 +341,9 @@ const gridOptions: GridOptions<GroupRow> = {
     <PlAlert v-if="barcodeOverlapLines.length > 0" type="warn" label="Overlapping barcodes">
       In each pair below, a read of the first sample also matches the second sample's barcodes when
       the bases after a shorter barcode spell the rest of the longer one. Such reads are assigned to
-      the second sample. To keep such samples apart, add the fixed sequence that follows the barcode
-      to the tag pattern. The list assumes each barcode starts at a fixed position in the read; it
-      misses overlaps behind a variable-length run before a barcode or two placeholders side by
-      side.
+      the second sample, and a read of the second sample with a sequencing error in those bases goes
+      to the first. To keep such samples apart, add the fixed sequence that follows the barcode to
+      the tag pattern.
       <ul>
         <li v-for="line in barcodeOverlapLines" :key="line">{{ line }}</li>
       </ul>

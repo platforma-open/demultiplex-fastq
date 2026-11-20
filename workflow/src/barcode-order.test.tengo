@@ -67,21 +67,13 @@ Test_prefixOverlaps_emptyForEqualLengthBarcodes := func() {
 	test.isEqual([], _overlaps(rows, [[]]), "fixed-length set never overlaps")
 }
 
-Test_prefixOverlaps_skipsPairPinnedByDifferentBase := func() {
+Test_prefixOverlaps_fixedRunSeparatesOnlyWhereItDiffers := func() {
 	rows := [_row("short", ["ACGTACG"]), _row("long", ["ACGTACGTTG"])]
-	test.isEqual([], _overlaps(rows, [["G"]]),
+	test.isEqual(0, len(_overlaps(rows, [["G"]])),
 		"a fixed G after the barcode, where the longer barcode has T, keeps the samples apart")
-}
-
-Test_prefixOverlaps_keepsPairWhenPinMatchesLongerBarcode := func() {
-	rows := [_row("short", ["ACGTACG"]), _row("long", ["ACGTACGTTG"])]
 	test.isEqual(1, len(_overlaps(rows, [["T"]])),
 		"a fixed T after the barcode is what the longer barcode has there too")
-}
-
-Test_prefixOverlaps_anyDifferingRunSeparates := func() {
-	rows := [_row("short", ["ACGTACG"]), _row("long", ["ACGTACGTTG"])]
-	test.isEqual([], _overlaps(rows, [["T", "G"]]),
+	test.isEqual(0, len(_overlaps(rows, [["T", "G"]])),
 		"the occurrence followed by G separates them, even if another is followed by T")
 }
 
@@ -133,8 +125,10 @@ Test_fixedRuns_stopsAtVariableContent := func() {
 	test.isEqual([["GGGAAA"], ["NN"], []],
 		barcodeOrder.fixedRuns("^{S1}GGGAAA{S2}N{2}(R1:*)\\^{S3}(R2:*)", ["S1", "S2", "S3"]),
 		"S1 runs to the next placeholder; S2 to the capture; S3 has none")
-	test.isEqual([["NAN"]], barcodeOrder.fixedRuns("^{S1}N{1}AN{2:3}C(R1:*)", ["S1"]),
-		"N{2:3} has no fixed length; the run keeps one N for it and ends")
+	test.isEqual([["NA"]], barcodeOrder.fixedRuns("^{S1}N{1}AN{2:3}C(R1:*)", ["S1"]),
+		"N{2:3} has no fixed length; the run ends before it")
+	test.isEqual([["GTT"]], barcodeOrder.fixedRuns("^{S1}GT{2}A{0:2}C(R1:*)", ["S1"]),
+		"T{2} is two fixed bases; A{0:2} may be absent, so the run ends before it")
 }
 
 Test_fixedRuns_collectsEveryOccurrence := func() {

@@ -5,34 +5,33 @@
 
 text := import("text")
 
-substitute := func(side, names, values, literalNames) {
+_substitute := func(side, names, values, literalNames) {
 	out := side
 	for i, name in names {
-		placeholder := "{" + name + "}"
 		replacement := "(" + name + ":" + values[i] + ")"
 		if literalNames[name] {
 			replacement = values[i]
 		}
-		out = text.replace(out, placeholder, replacement, -1)
+		out = text.replace(out, "{" + name + "}", replacement, -1)
 	}
 	return out
 }
 
-expandSingle := func(r1Side, names, values) {
-	return substitute(r1Side, names, values, {})
-}
-
-expandPair := func(r1Side, r2Side, names, values) {
+// `r2Side` is "" for single-end input.
+expand := func(r1Side, r2Side, names, values) {
+	r1 := _substitute(r1Side, names, values, {})
+	if r2Side == "" {
+		return r1
+	}
 	onR1 := {}
 	for name in names {
 		if text.contains(r1Side, "{" + name + "}") {
 			onR1[name] = true
 		}
 	}
-	return substitute(r1Side, names, values, {}) + "\\" + substitute(r2Side, names, values, onR1)
+	return r1 + "\\" + _substitute(r2Side, names, values, onR1)
 }
 
 export {
-	expandSingle: expandSingle,
-	expandPair: expandPair
+	expand: expand
 }

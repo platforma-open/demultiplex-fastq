@@ -17,17 +17,17 @@ orderRows := func(rows) {
 	})
 }
 
-// "N{3}GA" -> "NNNGA".
+// "N{3}GA{2}" -> "NNNGAA".
 _expandRun := func(run) {
 	out := ""
-	tokens := text.re_find("N\\{[0-9]+\\}|[ACGTN]", run, -1)
+	tokens := text.re_find("[ACGTN]\\{[0-9]+\\}|[ACGTN]", run, -1)
 	if is_undefined(tokens) {
 		return out
 	}
 	for t in tokens {
 		tok := t[0].text
 		if len(tok) > 1 {
-			out += text.repeat("N", int(tok[2:len(tok) - 1]))
+			out += text.repeat(tok[0:1], int(tok[2:len(tok) - 1]))
 		} else {
 			out += tok
 		}
@@ -36,17 +36,21 @@ _expandRun := func(run) {
 }
 
 // fixedRuns returns, per canonical name, the fixed-length sequence the pattern
-// requires right after each occurrence of its placeholder: bases and N, with N{n}
-// expanded. A run stops at anything of variable or unknown content. Empty runs
-// are left out.
+// requires right after each occurrence of its placeholder: bases and N, with
+// X{n} expanded. A run stops at anything of variable or unknown content,
+// including a base with a range such as T{0:2}. Empty runs are left out.
 fixedRuns := func(canonicalPattern, canonicalNames) {
 	out := []
 	for name in canonicalNames {
 		runs := []
-		matches := text.re_find("\\{" + name + "\\}((?:[ACGT]|N\\{[0-9]+\\}|N)*)", canonicalPattern, -1)
+		matches := text.re_find("\\{" + name + "\\}((?:[ACGTN](?:\\{[0-9]+\\})?)*)((?:\\{[0-9]*:)?)", canonicalPattern, -1)
 		if !is_undefined(matches) {
 			for m in matches {
 				run := _expandRun(m[1].text)
+				// `{n:` right after the run is a range on its last base.
+				if m[2].text != "" && run != "" {
+					run = run[:len(run) - 1]
+				}
 				if run != "" {
 					runs = append(runs, run)
 				}
@@ -100,8 +104,10 @@ _overlap := func(a, b, runs) {
 }
 
 // Sample pairs a read can match both of. `rows` are in alternative order; mitool
-// keeps the first alternative on a tie, so reads of `from` can go to `to`, never
-// the reverse. Compares values tag by tag, so it assumes each barcode starts at a
+// keeps the first alternative on a tie, so error-free reads of `from` can go to
+// `to`, never the reverse. A `to` read with a sequencing error in the bases that
+// tell the two apart matches only `from`. Compares values tag by tag, so it
+// assumes each barcode starts at a
 // fixed read position; a variable-length run before a placeholder, or adjacent
 // placeholders, can overlap rows it does not report.
 prefixOverlaps := func(sampleGroupId, rows, runs) {
