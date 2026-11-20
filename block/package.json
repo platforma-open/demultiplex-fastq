@@ -50,7 +50,7 @@
       "support": "mailto:support@milaboratories.com",
       "description": "Split a multiplexed FASTQ dataset into per-sample reads using sample barcodes.",
       "longDescription": "file:../docs/description.md",
-      "changelog": "file:../CHANGELOG.md",
+      "changelog": "file:CHANGELOG.md",
       "tags": [
         "tutorial"
       ],

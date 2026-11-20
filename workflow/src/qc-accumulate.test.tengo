@@ -1,0 +1,65 @@
+test := import("@platforma-sdk/workflow-tengo:test")
+json := import("json")
+qcAccumulate := import(":qc-accumulate")
+
+_entry := func(sampleKey, matched) {
+	return { sampleKey: sampleKey, matched: matched }
+}
+
+// Expected flat map built from [groupId, sampleId, matched] triples — a map literal
+// cannot carry a computed key.
+_expect := func(triples) {
+	out := {}
+	for t in triples {
+		out[json.encode([t[0], t[1]])] = t[2]
+	}
+	return out
+}
+
+Test_addPerSampleMatched_sumsBarcodesOfOneSample := func() {
+	flat := qcAccumulate.addPerSampleMatched({}, "g1",
+		[_entry(["ACGTACG"], 100), _entry(["TTGCCAT"], 25)],
+		{ ACGTACG: "s1", TTGCCAT: "s1" })
+	test.isEqual(_expect([["g1", "s1", 125]]), flat,
+		"two barcodes of one sample sum instead of overwriting")
+}
+
+Test_addPerSampleMatched_keepsSamplesApart := func() {
+	flat := qcAccumulate.addPerSampleMatched({}, "g1",
+		[_entry(["AAA"], 10), _entry(["CCC"], 7)],
+		{ AAA: "s1", CCC: "s2" })
+	test.isEqual(_expect([["g1", "s1", 10], ["g1", "s2", 7]]), flat,
+		"distinct samples keep their own totals")
+}
+
+Test_addPerSampleMatched_keepsGroupsApart := func() {
+	flat := qcAccumulate.addPerSampleMatched({}, "g1",
+		[_entry(["AAA"], 10)], { AAA: "s1" })
+	flat = qcAccumulate.addPerSampleMatched(flat, "g2",
+		[_entry(["AAA"], 4)], { AAA: "s1" })
+	test.isEqual(_expect([["g1", "s1", 10], ["g2", "s1", 4]]), flat,
+		"the same sample in two groups is not pooled across them")
+}
+
+Test_addPerSampleMatched_dropsUnknownTuple := func() {
+	flat := qcAccumulate.addPerSampleMatched({}, "g1",
+		[_entry(["AAA"], 10), _entry(["GGG"], 99)],
+		{ AAA: "s1" })
+	test.isEqual(_expect([["g1", "s1", 10]]), flat,
+		"a tuple absent from tupleToSample is dropped silently")
+}
+
+Test_addPerSampleMatched_sumsMultiTagTuples := func() {
+	flat := qcAccumulate.addPerSampleMatched({}, "g1",
+		[_entry(["ACGT", "GGCC"], 12), _entry(["TTAA", "CCGG"], 8)],
+		{ ACGT_GGCC: "s1", TTAA_CCGG: "s1" })
+	test.isEqual(_expect([["g1", "s1", 20]]), flat,
+		"multi-tag tuples join on _ and sum into one sample")
+}
+
+Test_tupleKey_joinsOnUnderscore := func() {
+	test.isEqual("ACGT_GGCC", qcAccumulate.tupleKey(["ACGT", "GGCC"]),
+		"tuple values join with _")
+	test.isEqual("ACGT", qcAccumulate.tupleKey(["ACGT"]),
+		"a single-tag tuple is its own key")
+}

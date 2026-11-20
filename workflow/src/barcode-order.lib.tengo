@@ -1,0 +1,135 @@
+// Ordering and overlap checks over one sampleGroup's barcode rows.
+// A row is { sampleId, values: [v_S1, v_S2, ...], tupleKey }.
+
+slices := import("@platforma-sdk/workflow-tengo:slices")
+text := import("text")
+
+// mitool ranks `||` alternatives by mismatch cost alone and keeps the first on a
+// tie, so a barcode listed before a longer barcode it prefixes takes that
+// barcode's reads. Longest tuple first; tupleKey keeps the order deterministic.
+// tupleKey is the values joined by "_", so its length orders rows by total length.
+orderRows := func(rows) {
+	return slices.quickSortFn(rows, func(a, b) {
+		if len(a.tupleKey) != len(b.tupleKey) {
+			return len(a.tupleKey) > len(b.tupleKey)
+		}
+		return a.tupleKey < b.tupleKey
+	})
+}
+
+// "N{3}GA{2}" -> "NNNGAA".
+_expandRun := func(run) {
+	out := ""
+	tokens := text.re_find("[ACGTN]\\{[0-9]+\\}|[ACGTN]", run, -1)
+	if is_undefined(tokens) {
+		return out
+	}
+	for t in tokens {
+		tok := t[0].text
+		if len(tok) > 1 {
+			out += text.repeat(tok[0:1], int(tok[2:len(tok) - 1]))
+		} else {
+			out += tok
+		}
+	}
+	return out
+}
+
+// fixedRuns returns, per canonical name, the fixed-length sequence the pattern
+// requires right after each occurrence of its placeholder: bases and N, with
+// X{n} expanded. A run stops at anything of variable or unknown content,
+// including a base with a range such as T{0:2}. Empty runs are left out.
+fixedRuns := func(canonicalPattern, canonicalNames) {
+	out := []
+	for name in canonicalNames {
+		runs := []
+		matches := text.re_find("\\{" + name + "\\}((?:[ACGTN](?:\\{[0-9]+\\})?)*)((?:\\{[0-9]*:)?)", canonicalPattern, -1)
+		if !is_undefined(matches) {
+			for m in matches {
+				run := _expandRun(m[1].text)
+				// `{n:` right after the run is a range on its last base.
+				if m[2].text != "" && run != "" {
+					run = run[:len(run) - 1]
+				}
+				if run != "" {
+					runs = append(runs, run)
+				}
+			}
+		}
+		out = append(out, runs)
+	}
+	return out
+}
+
+// True when `a` and `b` have different known bases at some position of `a`.
+_conflicts := func(a, b) {
+	for j := 0; j < len(a); j++ {
+		ca := a[j:j + 1]
+		cb := b[j:j + 1]
+		if ca != "N" && cb != "N" && ca != cb {
+			return true
+		}
+	}
+	return false
+}
+
+// True when a read can match both rows exactly. Per tag, one value must be a
+// prefix of the other, N matching any base; the extra bases `ext` of the longer
+// value then sit where the shorter value's alternative expects its fixed run,
+// so a run that differs from `ext + run` at a known base separates the rows.
+// The alternative must match every tag, so one separating tag is enough.
+_overlap := func(a, b, runs) {
+	if a.sampleId == b.sampleId {
+		return false
+	}
+	for i, av in a.values {
+		bv := b.values[i]
+		short := av
+		long := bv
+		if len(av) > len(bv) {
+			short = bv
+			long = av
+		}
+		// N in a barcode matches any base.
+		if _conflicts(short, long) {
+			return false
+		}
+		ext := long[len(short):]
+		for run in runs[i] {
+			if _conflicts(run, ext + run) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// Sample pairs a read can match both of. `rows` are in alternative order; mitool
+// keeps the first alternative on a tie, so error-free reads of `from` can go to
+// `to`, never the reverse. A `to` read with a sequencing error in the bases that
+// tell the two apart matches only `from`. Compares values tag by tag, so it
+// assumes each barcode starts at a fixed read position; a variable-length run
+// before a placeholder, or adjacent placeholders, can overlap rows it does not
+// report.
+prefixOverlaps := func(sampleGroupId, rows, runs) {
+	out := []
+	for i, to in rows {
+		for j := i + 1; j < len(rows); j++ {
+			from := rows[j]
+			if _overlap(to, from, runs) {
+				out = append(out, {
+					sampleGroupId: sampleGroupId,
+					from: { sampleId: from.sampleId, barcodes: from.values },
+					to: { sampleId: to.sampleId, barcodes: to.values }
+				})
+			}
+		}
+	}
+	return out
+}
+
+export {
+	orderRows: orderRows,
+	fixedRuns: fixedRuns,
+	prefixOverlaps: prefixOverlaps
+}

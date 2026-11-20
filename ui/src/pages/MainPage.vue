@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { AgGridVue } from "ag-grid-vue3";
 
+import type { OverlapSide } from "@platforma-open/milaboratories.demultiplex-fastq.model";
 import type { AnyLogHandle, LocalBlobHandle } from "@platforma-sdk/model";
 import type { PlAgHeaderComponentParams, PlChartStackedBarSettings } from "@platforma-sdk/ui-vue";
 import {
@@ -10,6 +11,7 @@ import {
   PlAgOverlayLoading,
   PlAgOverlayNoRows,
   PlAgTextAndButtonCell,
+  PlAlert,
   PlBlockPage,
   PlBtnGhost,
   PlLogView,
@@ -194,6 +196,28 @@ const rows = computed<GroupRow[]>(() => {
   }));
 });
 
+const MAX_OVERLAP_LINES = 20;
+
+// One line per sample pair a read can match both of, capped at MAX_OVERLAP_LINES.
+const barcodeOverlapLines = computed<string[]>(() => {
+  const overlaps = app.model.outputs.barcodeOverlaps;
+  if (!overlaps) return [];
+  const sampleLabels = app.model.outputs.sampleLabels ?? {};
+  const groupLabels = app.model.outputs.sampleGroupLabels ?? {};
+  const side = (s: OverlapSide) =>
+    `${sampleLabels[s.sampleId] ?? s.sampleId} (${s.barcodes
+      .map((b, i) => `${overlaps.tags[i]}=${b}`)
+      .join(", ")})`;
+  const lines = overlaps.pairs
+    .slice(0, MAX_OVERLAP_LINES)
+    .map(
+      (p) =>
+        `${groupLabels[p.sampleGroupId] ?? p.sampleGroupId}: ${side(p.from)} can lose reads to ${side(p.to)}`,
+    );
+  const hidden = overlaps.pairs.length - lines.length;
+  return hidden > 0 ? [...lines, `…and ${hidden} more ${hidden === 1 ? "pair" : "pairs"}`] : lines;
+});
+
 const loadingOverlayParams = computed(() => {
   if (app.model.outputs.mitoolLogs !== undefined) {
     return { variant: "running" as const, runningText: "Demultiplexing" };
@@ -314,6 +338,15 @@ const gridOptions: GridOptions<GroupRow> = {
         </template>
       </PlBtnGhost>
     </template>
+    <PlAlert v-if="barcodeOverlapLines.length > 0" type="warn" label="Overlapping barcodes">
+      In each pair below, some reads match the barcodes of both samples. Such reads are assigned to
+      the second sample, and a read of the second sample with a sequencing error in the bases that
+      tell the two apart goes to the first. To keep such samples apart, add the fixed sequence that
+      follows the barcode to the tag pattern.
+      <ul>
+        <li v-for="line in barcodeOverlapLines" :key="line">{{ line }}</li>
+      </ul>
+    </PlAlert>
     <div :style="{ flex: 1 }">
       <AgGridVue
         :theme="AgGridTheme"

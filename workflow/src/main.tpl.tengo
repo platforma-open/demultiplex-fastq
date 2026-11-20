@@ -53,6 +53,7 @@ wf.body(func(args) {
 	qcSpec := demuxResult.output("qcSpec")
 	qcData := demuxResult.output("qcData")
 	qcGroupSummary := demuxResult.output("qcGroupSummary")
+	barcodeOverlaps := demuxResult.output("barcodeOverlaps")
 
 	return {
 		outputs: {
@@ -60,7 +61,8 @@ wf.body(func(args) {
 			mitoolLogs: mitoolLogsData,
 			reports: pframes.exportColumnData(reportsData),
 			qc: qcData,
-			qcGroupSummary: qcGroupSummary
+			qcGroupSummary: qcGroupSummary,
+			barcodeOverlaps: barcodeOverlaps
 		},
 		exports: {
 			demultiplexedFastq: {

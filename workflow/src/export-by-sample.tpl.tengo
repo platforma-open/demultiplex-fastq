@@ -132,6 +132,7 @@ self.body(func(inputs) {
 		})
 
 		exportCmd := exec.builder().
+			name("demux-export-fastq").
 			printErrStreamToStdout().
 			env("MI_PROGRESS_PREFIX", progressPrefix).
 			software(mitoolSw).
