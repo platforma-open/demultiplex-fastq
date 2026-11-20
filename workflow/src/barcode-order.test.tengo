@@ -67,6 +67,15 @@ Test_prefixOverlaps_emptyForEqualLengthBarcodes := func() {
 	test.isEqual([], _overlaps(rows, [[]]), "fixed-length set never overlaps")
 }
 
+Test_prefixOverlaps_treatsNInBarcodeAsAnyBase := func() {
+	test.isEqual(1, len(_overlaps([_row("a", ["ACGN"]), _row("b", ["ACGTAA"])], [[]])),
+		"ACGN matches the start of ACGTAA")
+	test.isEqual(1, len(_overlaps([_row("a", ["ACGN"]), _row("b", ["ACGT"])], [[]])),
+		"equal-length barcodes that differ only at an N match the same read")
+	test.isEqual(0, len(_overlaps([_row("a", ["ACNA"]), _row("b", ["ACGTAA"])], [[]])),
+		"a known base after the N still separates")
+}
+
 Test_prefixOverlaps_fixedRunSeparatesOnlyWhereItDiffers := func() {
 	rows := [_row("short", ["ACGTACG"]), _row("long", ["ACGTACGTTG"])]
 	test.isEqual(0, len(_overlaps(rows, [["G"]])),

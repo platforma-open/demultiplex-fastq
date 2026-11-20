@@ -74,7 +74,7 @@ _conflicts := func(a, b) {
 }
 
 // True when a read can match both rows exactly. Per tag, one value must be a
-// prefix of the other; the extra bases `ext` of the longer value then sit where
+// prefix of the other, N matching any base; the extra bases `ext` of the longer value then sit where
 // the shorter value's alternative expects its fixed run, so a run that differs
 // from `ext + run` at a known base separates the rows. The alternative must
 // match every tag, so one separating tag is enough.
@@ -90,7 +90,8 @@ _overlap := func(a, b, runs) {
 			short = bv
 			long = av
 		}
-		if !text.has_prefix(long, short) {
+		// N in a barcode matches any base.
+		if _conflicts(short, long) {
 			return false
 		}
 		ext := long[len(short):]
