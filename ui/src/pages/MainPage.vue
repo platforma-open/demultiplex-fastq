@@ -215,7 +215,7 @@ const barcodeOverlapLines = computed<string[]>(() => {
         `${groupLabels[p.sampleGroupId] ?? p.sampleGroupId}: ${side(p.from)} can lose reads to ${side(p.to)}`,
     );
   const hidden = overlaps.pairs.length - lines.length;
-  return hidden > 0 ? [...lines, `…and ${hidden} more pairs`] : lines;
+  return hidden > 0 ? [...lines, `…and ${hidden} more ${hidden === 1 ? "pair" : "pairs"}`] : lines;
 });
 
 const loadingOverlayParams = computed(() => {
@@ -339,11 +339,10 @@ const gridOptions: GridOptions<GroupRow> = {
       </PlBtnGhost>
     </template>
     <PlAlert v-if="barcodeOverlapLines.length > 0" type="warn" label="Overlapping barcodes">
-      In each pair below, a read of the first sample also matches the second sample's barcodes when
-      the bases after a shorter barcode spell the rest of the longer one. Such reads are assigned to
-      the second sample, and a read of the second sample with a sequencing error in those bases goes
-      to the first. To keep such samples apart, add the fixed sequence that follows the barcode to
-      the tag pattern.
+      In each pair below, some reads match the barcodes of both samples. Such reads are assigned to
+      the second sample, and a read of the second sample with a sequencing error in the bases that
+      tell the two apart goes to the first. To keep such samples apart, add the fixed sequence that
+      follows the barcode to the tag pattern.
       <ul>
         <li v-for="line in barcodeOverlapLines" :key="line">{{ line }}</li>
       </ul>

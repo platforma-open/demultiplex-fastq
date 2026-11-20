@@ -74,10 +74,10 @@ _conflicts := func(a, b) {
 }
 
 // True when a read can match both rows exactly. Per tag, one value must be a
-// prefix of the other, N matching any base; the extra bases `ext` of the longer value then sit where
-// the shorter value's alternative expects its fixed run, so a run that differs
-// from `ext + run` at a known base separates the rows. The alternative must
-// match every tag, so one separating tag is enough.
+// prefix of the other, N matching any base; the extra bases `ext` of the longer
+// value then sit where the shorter value's alternative expects its fixed run,
+// so a run that differs from `ext + run` at a known base separates the rows.
+// The alternative must match every tag, so one separating tag is enough.
 _overlap := func(a, b, runs) {
 	if a.sampleId == b.sampleId {
 		return false
@@ -108,9 +108,9 @@ _overlap := func(a, b, runs) {
 // keeps the first alternative on a tie, so error-free reads of `from` can go to
 // `to`, never the reverse. A `to` read with a sequencing error in the bases that
 // tell the two apart matches only `from`. Compares values tag by tag, so it
-// assumes each barcode starts at a
-// fixed read position; a variable-length run before a placeholder, or adjacent
-// placeholders, can overlap rows it does not report.
+// assumes each barcode starts at a fixed read position; a variable-length run
+// before a placeholder, or adjacent placeholders, can overlap rows it does not
+// report.
 prefixOverlaps := func(sampleGroupId, rows, runs) {
 	out := []
 	for i, to in rows {
